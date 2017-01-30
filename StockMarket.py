@@ -2,7 +2,12 @@
 # Stock Market Simulation
 #
 
-import sys, os
+import os
+
+class Options(object):
+	pass
+opts = Options()
+opts.verbose = False
 
 class InsufficientFunds(Exception):
 	pass
@@ -56,6 +61,8 @@ class Simulation(object):
 		self.cash = 0
 		self.stock = self.initialBalance
 		self.shares = self.stock / marketData[(startYear-1,12)][0]
+		if opts.verbose: print "{0}({1}):".format(self.__class__.__name__, startYear)
+		self.year = self.startYear - 1
 		self.SimInit()		# Give the algorithm a chance to initialize itself
 		for year in xrange(startYear, startYear+self.years):
 			assert self.cash >= 0.0
@@ -75,12 +82,13 @@ class Simulation(object):
 			try:
 				self.SimPeriod(startYear)
 			except InsufficientFunds as ex:
-				print ex
+				if opts.verbose: print ex
 				failures += 1
 		if failures != 0:
 			print "{0}: {1} failed periods".format(self.__class__.__name__, failures)
 
 class AllStock(Simulation):
+	"""Portfolio is 100% stocks"""
 	def SimYear(self):
 		price = marketData[(self.year,12)][0]
 		sellShares = self.withdrawal / price
@@ -88,9 +96,50 @@ class AllStock(Simulation):
 			raise InsufficientFunds(self)
 		self.shares -= sellShares
 		self.stock = self.balance = self.shares * price
+		if opts.verbose: print "    year={}, balance={:,.2f}".format(self.year, self.balance)
+
+class NinetyTen(Simulation):
+	"""Portfolio is 90% stock, 10% cash, rebalanced each year"""
+	def Rebalance(self):
+		self.cash = self.balance * 0.10
+		self.stock = self.balance * 0.90
+		self.shares = self.stock / marketData[(self.year,12)][0]
+		if opts.verbose: print "    year={}, cash={:,.2f}, stock={:,.2f}, balance={:,.2f}".format(self.year, self.cash, self.stock, self.balance)
+	def SimInit(self):
+		self.Rebalance()
+	def SimYear(self):
+		price = marketData[(self.year,12)][0]
+		self.stock = self.shares * price
+		self.balance = self.cash + self.stock
+		if self.balance < self.withdrawal:
+			raise InsufficientFunds(self)
+		self.balance -= self.withdrawal
+		self.Rebalance()
+
+class EightyTwenty(NinetyTen):
+	"""Portfolio is 80% stock, 20% cash, rebalanced each year"""
+	def Rebalance(self):
+		self.cash = self.balance * 0.20
+		self.stock = self.balance * 0.80
+		self.shares = self.stock / marketData[(self.year,12)][0]
+		if opts.verbose: print "    year={}, cash={:,.2f}, stock={:,.2f}, balance={:,.2f}".format(self.year, self.cash, self.stock, self.balance)
+
+class FiftyFifty(NinetyTen):
+	"""Portfolio is 50% stock, 50% cash, rebalanced each year"""
+	def Rebalance(self):
+		self.cash = self.balance * 0.50
+		self.stock = self.balance * 0.50
+		self.shares = self.stock / marketData[(self.year,12)][0]
+		if opts.verbose: print "    year={}, cash={:,.2f}, stock={:,.2f}, balance={:,.2f}".format(self.year, self.cash, self.stock, self.balance)
 
 def main():
 	AllStock().run()
-	
+	NinetyTen().run()
+	EightyTwenty().run()
+	# FiftyFifty().run()
+
 if __name__ == "__main__":
+	import sys
+	if "-v" in sys.argv:
+		opts.verbose = True
 	main()
