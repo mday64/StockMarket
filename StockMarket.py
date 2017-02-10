@@ -2,7 +2,7 @@
 # Stock Market Simulation
 #
 
-import os, collections
+import sys, os, collections
 
 class Options(object):
 	pass
@@ -12,20 +12,20 @@ opts.verbose = False
 class InsufficientFunds(Exception):
 	pass
 
-MarketDataValue = collections.namedtuple('MarketDataValue', ['price', 'dividend', 'earnings'])
+MarketDataValue = collections.namedtuple('MarketDataValue', 'price,dividend,earnings,cpi,gs10,real_price,real_dividend,real_earnings'.split(','))
 
 class MarketData(dict):
-	def __init__(self, path="StockMarketData.csv"):
+	def __init__(self, path="ie_data.csv"):
 		minYear = None
 		maxYear = None
 		filename = os.path.expanduser(path)
 		with open(filename, 'rU') as f:
 			l = f.readline()
-			assert l == "Date,Real Price,Real Dividend,Real Earnings\n"
+			assert l == "Year,Month,Price,Dividend,Earnings,CPI,GS10,Real Price,Real Dividend,Real Earnings\n"
 			for l in f:
 				fields = l.rstrip("\n").split(',')
-				assert len(fields) == 4
-				year,month = map(int, fields[0].split('.'))
+				assert len(fields) == 10
+				year,month = map(int, fields[0:2])
 			
 				if minYear is None:
 					minYear = year
@@ -37,14 +37,10 @@ class MarketData(dict):
 				elif year > maxYear:
 					maxYear = year
 			
-				price,dividend = map(float, fields[1:3])
-				if fields[3] == "":
-					earnings = None
-				else:
-					earnings = float(fields[3])
-				self[(year,month)] = MarketDataValue(price, dividend, earnings)
-				if month == 12:
-					self[year] = MarketDataValue(price, dividend, earnings)
+				vals = [None if x == "" else float(x) for x in fields[2:]]
+				self[(year,month)] = MarketDataValue(*vals)
+				if month == 1:
+					self[year] = MarketDataValue(*vals)
 		self.minYear = minYear
 		self.maxYear = maxYear
 marketData = MarketData()
@@ -52,44 +48,55 @@ marketData = MarketData()
 class Simulation(object):
 	initialBalance = 1000000.00
 	
-	def __init__(self, years=40, rate=0.04):
+	def __init__(self, years=30, rate=0.04):
 		self.years = years
 		self.withdrawalRate = rate
-		self.withdrawal = self.initialBalance * rate
 		self.logStr = ""
 		
 	def __repr__(self):
-		return self.logStr + self.__class__.__name__ + "(" + \
-			"startYear={}, year={}, ".format(self.startYear, self.year) + \
+		return self.__class__.__name__ + "(" + \
+			"startYear={}, year={}, withdrawal={:,.2f}, ".format(self.startYear, self.year, self.withdrawal) + \
 			"balance={:,.2f}, cash={:,.2f}, stock={:,.2f}, ".format(self.balance, self.cash, self.stock) + \
-			"shares={:,.2f}, price={:,.2f})".format(self.shares, self.price)
+			"shares={:,.2f}, price={:,.2f})\n".format(self.shares, self.price) + \
+			self.logStr
 	
 	def Log(self, s):
 		self.logStr = self.logStr + s
 	
 	def SimPeriod(self, startYear):
 		self.logStr = ""
-		self.startYear = startYear
-		self.year = self.startYear - 1		# To easily grab initial stock price
+		self.startYear = self.year = startYear
 		self.balance = self.initialBalance
+		self.initialWithdrawal = self.withdrawal = self.initialBalance * self.withdrawalRate
 		self.cash = 0
 		self.price = marketData[self.year].price
 		self.stock = self.initialBalance
 		self.shares = self.stock / self.price
 		if opts.verbose: print "{0}({1}):".format(self.__class__.__name__, startYear)
 		self.SimInit()		# Give the algorithm a chance to initialize itself
-		for year in xrange(startYear, startYear+self.years):
-			assert self.cash >= 0.0
-			assert self.shares >= 0.0
+		self.Log("    {}: withdrawal={:,.2f} cash={:,.2f} stock={:,.2f} shares={:,.2f} balance={:,.2f}; ".format(self.year, self.withdrawal, self.cash, self.stock, self.shares, self.balance))
+		self.SimYear()		# Do the initial withdrawal
+		for year in xrange(startYear+1, startYear+self.years):
+			# Do subsequent years
 			self.year = year
+
+			# Adjust withdrawal for inflation
+			self.withdrawal = self.withdrawal * marketData[year].cpi / marketData[year-1].cpi
+
+			# Take dividend as cash
 			dividend = marketData[year].dividend * self.shares
-			# print "{0}: dividend={1}".format(year, dividend)
 			self.cash += dividend
-			self.price = marketData[(year, 12)].price
+			
+			# Update stock price, stock value, and total value
+			self.price = marketData[year].price
 			self.stock = self.shares * self.price
 			self.balance = self.cash + self.stock
-			self.SimYear()	# Move forward a year in the simulation
-	
+			self.Log("    {}: withdrawal={:,.2f} dividends={:,.2f} cash={:,.2f} stock={:,.2f} shares={:,.2f} balance={:,.2f}; ".format(year, self.withdrawal, dividend, self.cash, self.stock, self.shares, self.balance))
+			
+			# Let the specific algorithm decide how to satisfy the withdrawal
+			self.SimYear()
+		if opts.verbose: print self.logStr
+
 	def SimInit(self):
 		pass
 	
@@ -103,7 +110,7 @@ class Simulation(object):
 			try:
 				self.SimPeriod(startYear)
 			except InsufficientFunds as ex:
-				print ex
+				print "\nFAILED! {}".format(ex)
 				failures += 1
 				failDuration += self.year - startYear
 		if failures != 0:
@@ -114,17 +121,19 @@ class AllStock(Simulation):
 	def SimYear(self):
 		if self.cash >= self.withdrawal:
 			# Withdrawal is all cash; don't sell any stock
+			self.Log("using cash\n".format(self.withdrawal))
 			self.cash -= self.withdrawal
 			self.balance -= self.withdrawal
+			# Reinvest excess cash?  (If so, rebalance with 100% stock, 0% cash)
 		else:
 			# Withdraw all cash; sell enough stock to make up the difference
 			sellShares = (self.withdrawal - self.cash) / self.price
 			if sellShares > self.shares:
 				raise InsufficientFunds(self)
+			self.Log("using cash; selling stock ({:,.2f}; {:,.2f} shares)\n".format(self.withdrawal-self.cash, sellShares))
 			self.shares -= sellShares
 			self.cash = 0.0
 			self.balance = self.stock = self.shares * self.price
-		self.Log("    year={}, balance={:,.2f}\n".format(self.year, self.balance))
 
 class NinetyTen(Simulation):
 	"""Portfolio is 90% stock, 10% cash, rebalanced each year"""
@@ -132,14 +141,19 @@ class NinetyTen(Simulation):
 		self.cash = self.balance * 0.10
 		self.stock = self.balance * 0.90
 		self.shares = self.stock / self.price
-		self.Log("    year={}, cash={:,.2f}, stock={:,.2f}, balance={:,.2f}\n".format(self.year, self.cash, self.stock, self.balance))
 	def SimInit(self):
 		self.Rebalance()
 	def SimYear(self):
 		if self.balance < self.withdrawal:
 			raise InsufficientFunds(self)
 		self.balance -= self.withdrawal
+		oldShares = self.shares
 		self.Rebalance()
+		newShares = self.shares
+		if newShares < oldShares:
+			self.Log("selling stock ({:,.2f}; {:,.2f} shares)\n".format((oldShares-newShares) * self.price, oldShares-newShares))
+		else:
+			self.Log("buying stock ({:,.2f}; {:,.2f} shares)\n".format((newShares-oldShares) * self.price, newShares-oldShares))
 
 class EightyTwenty(NinetyTen):
 	"""Portfolio is 80% stock, 20% cash, rebalanced each year"""
@@ -147,7 +161,6 @@ class EightyTwenty(NinetyTen):
 		self.cash = self.balance * 0.20
 		self.stock = self.balance * 0.80
 		self.shares = self.stock / self.price
-		self.Log("    year={}, cash={:,.2f}, stock={:,.2f}, balance={:,.2f}\n".format(self.year, self.cash, self.stock, self.balance))
 
 class FiftyFifty(NinetyTen):
 	"""Portfolio is 50% stock, 50% cash, rebalanced each year"""
@@ -155,56 +168,48 @@ class FiftyFifty(NinetyTen):
 		self.cash = self.balance * 0.50
 		self.stock = self.balance * 0.50
 		self.shares = self.stock / self.price
-		self.Log("    year={}, cash={:,.2f}, stock={:,.2f}, balance={:,.2f}\n".format(self.year, self.cash, self.stock, self.balance))
 
 class CashCushion(Simulation):
 	"""3 year cash cushion, used when portfolio is less than initial balance"""
-	def Log(self, s):
-		self.logStr = self.logStr + s
-		if self.startYear == 1969:
-			print s.rstrip('\n')
-
+	cushionYears = 3
 	def SimInit(self):
-		self.cash = self.balance * self.withdrawalRate * 5
-		self.cashGoal = self.cash
+		self.cash = self.cashGoal = self.withdrawal * self.cushionYears
 		self.stock = self.balance - self.cash
 		self.shares = self.stock / self.price
-		self.Log("    year={}, cash={:,.2f}, price={:,.2f}, stock={:,.2f}, balance={:,.2f}\n".format(self.year, self.cash, self.price, self.stock, self.balance))
 	def SimYear(self):
-		self.Log("    Begin year={}, cash={:,.2f}, price={:,.2f}, stock={:,.2f}, balance={:,.2f}\n".format(self.year, self.cash, self.price, self.stock, self.balance))
-		if self.balance < self.initialBalance:
+		self.cashGoal = self.withdrawal * self.cushionYears
+		if self.balance < (self.withdrawal / self.withdrawalRate):
 			# Try to use the cash cushion
 			if self.cash >= self.withdrawal:
 				self.cash -= self.withdrawal
-				self.Log("    Using cash cushion.\n")
+				self.Log("using cash\n")
 			else:
 				sellShares = (self.withdrawal - self.cash) / self.price
 				if sellShares > self.shares:
 					raise InsufficientFunds(self)
 				self.shares -= sellShares
 				self.cash = 0.0
-				self.Log("    Using cash cushion.  Selling {:,.2f} shares.\n".format(sellShares))
+				self.Log("using cash; selling stock ({:,.2f}; {:,.2f} shares)\n".format(sellShares * self.price, sellShares))
 		else:
 			# Sell stock.  Possibly replenish cash cushion.
-			msg = "    "
+			msg = ""
 			withdrawal = self.withdrawal
 			useCash = 0.0
 			if self.cash > self.cashGoal:
 				useCash = min(self.withdrawal, self.cash - self.cashGoal)
 				withdrawal -= useCash
 				self.cash -= useCash
-				msg = msg + "Using {:,.2f} excess cash.  ".format(useCash)
+				msg = msg + "using {:,.2f} excess cash; ".format(useCash)
 			sellShares = withdrawal / self.price
-			if self.cash < self.cashGoal and self.balance > self.initialBalance * (1 + self.withdrawalRate):
+			if self.cash < self.cashGoal and self.balance > (self.withdrawal + self.withdrawal / self.withdrawalRate):
 				sellShares = 2 * sellShares		# Replenish cash
-				msg = msg + "Replenishing cash.  "
+				msg = msg + "replenishing cash; "
 			if sellShares > self.shares:
 				raise InsufficientFunds(self)
 			self.shares -= sellShares
-			self.Log(msg + "Selling {:,.2f} shares.\n".format(sellShares))
+			self.Log(msg + "selling stock ({:,.2f}; {:,.2f} shares)\n".format(sellShares * self.price, sellShares))
 		self.balance -= self.withdrawal
 		self.stock = self.shares * self.price
-		self.Log("    End year={}, cash={:,.2f}, price={:,.2f}, stock={:,.2f}, balance={:,.2f}\n".format(self.year, self.cash, self.price, self.stock, self.balance))
 
 def main():
 	#AllStock().run()
