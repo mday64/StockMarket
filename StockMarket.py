@@ -1,13 +1,19 @@
+#!python3
 #
 # Stock Market Simulation
 #
 
-import sys, os, collections
+import sys
+import os
+import collections
 
-class Options(object):
+class Options():
 	pass
 opts = Options()
+opts.quiet = False
 opts.verbose = False
+opts.years = 30
+opts.rate = 0.04
 
 class InsufficientFunds(Exception):
 	pass
@@ -16,6 +22,7 @@ MarketDataValue = collections.namedtuple('MarketDataValue', 'price,dividend,earn
 
 class MarketData(dict):
 	def __init__(self, path="ie_data.csv"):
+		super().__init__()
 		minYear = None
 		maxYear = None
 		filename = os.path.expanduser(path)
@@ -39,26 +46,28 @@ class MarketData(dict):
 			
 				vals = [None if x == "" else float(x) for x in fields[2:]]
 				self[(year,month)] = MarketDataValue(*vals)
-				if month == 1:
+				if month == 12:
 					self[year] = MarketDataValue(*vals)
 		self.minYear = minYear
 		self.maxYear = maxYear
 marketData = MarketData()
 
-class Simulation(object):
+class Simulation():
 	initialBalance = 1000000.00
 	
-	def __init__(self, years=30, rate=0.04):
-		self.years = years
-		self.withdrawalRate = rate
+	def __init__(self):
+		self.years = opts.years
+		self.withdrawalRate = opts.rate
 		self.logStr = ""
 		
 	def __repr__(self):
-		return self.__class__.__name__ + "(" + \
+		s = self.__class__.__name__ + "(" + \
 			"startYear={}, year={}, withdrawal={:,.2f}, ".format(self.startYear, self.year, self.withdrawal) + \
 			"balance={:,.2f}, cash={:,.2f}, stock={:,.2f}, ".format(self.balance, self.cash, self.stock) + \
-			"shares={:,.2f}, price={:,.2f})\n".format(self.shares, self.price) + \
-			self.logStr
+			"shares={:,.2f}, price={:,.2f})\n".format(self.shares, self.price)
+		if opts.quiet is not True:
+			s += self.logStr
+		return s
 	
 	def Log(self, s):
 		self.logStr = self.logStr + s
@@ -72,17 +81,20 @@ class Simulation(object):
 		self.price = marketData[self.year].price
 		self.stock = self.initialBalance
 		self.shares = self.stock / self.price
-		if opts.verbose: print "{0}({1}):".format(self.__class__.__name__, startYear)
+		if opts.verbose: print("{0}({1}):".format(self.__class__.__name__, startYear))
 		self.SimInit()		# Give the algorithm a chance to initialize itself
 		self.Log("    {}: withdrawal={:,.2f} cash={:,.2f} stock={:,.2f} shares={:,.2f} balance={:,.2f}; ".format(self.year, self.withdrawal, self.cash, self.stock, self.shares, self.balance))
 		self.SimYear()		# Do the initial withdrawal
-		for year in xrange(startYear+1, startYear+self.years):
+		for year in range(startYear, startYear+self.years):
 			# Do subsequent years
 			self.year = year
 
 			# Adjust withdrawal for inflation
 			self.withdrawal = self.withdrawal * marketData[year].cpi / marketData[year-1].cpi
 
+			# Take a guess at interest earned on cash
+			self.cash = self.cash * (1 + marketData[year].gs10 / 300.0)
+			
 			# Take dividend as cash
 			dividend = marketData[year].dividend * self.shares
 			self.cash += dividend
@@ -95,7 +107,7 @@ class Simulation(object):
 			
 			# Let the specific algorithm decide how to satisfy the withdrawal
 			self.SimYear()
-		if opts.verbose: print self.logStr
+		if opts.verbose: print(self.logStr)
 
 	def SimInit(self):
 		pass
@@ -106,22 +118,22 @@ class Simulation(object):
 	def run(self):
 		failures = 0
 		failDuration = 0
-		for startYear in xrange(marketData.minYear+1, marketData.maxYear-self.years+2):
+		for startYear in range(marketData.minYear+1, marketData.maxYear-self.years+2):
 			try:
 				self.SimPeriod(startYear)
 			except InsufficientFunds as ex:
-				print "\nFAILED! {}".format(ex)
+				print("\nFAILED! {}".format(ex))
 				failures += 1
 				failDuration += self.year - startYear
 		if failures != 0:
-			print "{0}: {1} failed periods (avg. {2} years)".format(self.__class__.__name__, failures, failDuration/failures)
+			print("{0}: {1} failed periods (avg. {2} years)".format(self.__class__.__name__, failures, failDuration/failures))
 
 class AllStock(Simulation):
 	"""Portfolio is 100% stocks"""
 	def SimYear(self):
 		if self.cash >= self.withdrawal:
 			# Withdrawal is all cash; don't sell any stock
-			self.Log("using cash\n".format(self.withdrawal))
+			self.Log("using cash\n")
 			self.cash -= self.withdrawal
 			self.balance -= self.withdrawal
 			# Reinvest excess cash?  (If so, rebalance with 100% stock, 0% cash)
@@ -212,14 +224,20 @@ class CashCushion(Simulation):
 		self.stock = self.shares * self.price
 
 def main():
-	#AllStock().run()
+	AllStock().run()
 	#NinetyTen().run()
 	#EightyTwenty().run()
 	#FiftyFifty().run()
 	CashCushion().run()
 
-if __name__ == "__main__":
-	import sys
-	if "-v" in sys.argv:
-		opts.verbose = True
+if __name__ == "__main__":	
+	for arg in sys.argv:
+		if arg == '-v':
+			opts.verbose = True
+		elif arg == '-q':
+			opts.quiet = True
+		elif arg[0:3] == '-y=':
+			opts.years = int(arg[3:])
+		elif arg[0:3] == '-r=':
+			opts.rate = float(arg[3:])
 	main()
