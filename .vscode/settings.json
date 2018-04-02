@@ -1,0 +1,7 @@
+{
+    "python.pythonPath": "/Users/mark/anaconda3/bin/python",
+    "python.linting.pylintArgs": [
+        "--disable",
+        "R,C,W0312,W0201"
+    ]
+}
