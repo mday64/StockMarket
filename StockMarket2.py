@@ -70,7 +70,7 @@ def subranges(iterable, length):
 # Should I just assume that cash earns 0%, or that it matches inflation?
 #
 
-# Is this the best name?  Should it be something like MarketData?
+# Is this the best name?  Should it be something like MarketData or ShillerData?
 SP500 = collections.namedtuple('SP500', 'date close dividend earnings CPI GS10 '+
     'real_price real_div real_earnings')
 
@@ -108,6 +108,7 @@ def read_shiller(fn="ie_data-2.csv"):
                 # Likely an empty string for dividend, earnings, CPI or GS10
                 break
 
+# Should this be YahooData?
 YahooFinance = collections.namedtuple('YahooFinance', 'date open high low close adj_close volume')
 def read_yahoo(fn='^GSPC.csv'):
     with open(fn, mode='r') as f:
@@ -121,9 +122,6 @@ def read_yahoo(fn='^GSPC.csv'):
                 yield YahooFinance(date, *values)
             except ValueError:
                 continue
-
-
-# Need a function to return subranges of length N (eg., for a potential retirement period)
 
 Decline = collections.namedtuple('Decline', 'peak trough recovery percent')
 
@@ -198,11 +196,19 @@ class Portfolio(object):
     def __repr__(self):
         return f'{self.__class__.__name__}(shares={self.shares})'
 
+#
+# TODO: Need a history of the portfolio balance, stock prices, and Consumer Price Index.
+# Should that be a property of the Portfolio object, or should it be separate?
+#
 
 #
 # I would like to be able to customize/parameterize the following:
 #   * Algorithm for adjusting withdrawal amount
+#       * Adjust up by inflation, typically
 #       * Might depend on balance or stock price history
+#           * Portfolio up enough, ratchet up the withdrawal
+#               * Should there be a parameter to control the new target percentage?
+#           * In a down year, perhaps decrease the withdrawal (before/after adjusting for inflation)
 #   * Algorithm/data about asset mix (cash, stock, bonds, etc.)
 #       * Need to be able to provide current balance based on Shiller data
 #       * Need to be able to make a withdrawal, including rebalancing asset classes as needed
@@ -211,6 +217,8 @@ class Portfolio(object):
 #   * Secondary withdrawal percentage (eg., when the portfolio has grown substantially)
 #   * Length of retirement (or is that the caller's responsibility?)
 #       * Might need to know, to adjust withdrawal amount based on time remaining
+#   * How many withdrawals during the year?  (Start with 4 - quarterly)
+#   * How often to adjust the withdrawal amount?
 #
 # I'd like it to return a sequence of absolute balance, and either inflation-adjusted balance
 # or Consumer Price Index.  Should it return an indication of insufficient funds, or deduce
