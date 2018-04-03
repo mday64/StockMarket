@@ -173,55 +173,6 @@ def gspc_declines(min_percent=0.05):
             print('  '.join([summarize(tick) for tick in (peak, trough, recovery)]), '  {:.2%}'.format(percent))
 
 #
-# It's probably better to use itertools.islice(seq, None, None, 3)
-#
-def quarterly(market_data_seq):
-    '''
-    Yield the last market data for each calendar quarter.
-
-    @market_data_seq is an iterable.  Each item contains a @date attribute
-    with @year and @month attributes.
-    '''
-    def quarter(date):
-        return (date.year, (date.month - 1) // 3)
-    
-    market_data = iter(market_data_seq)
-    last_tick = next(market_data)
-    last_q = quarter(last_tick.date)
-    
-    for tick in market_data:
-        q = quarter(tick.date)
-        if q != last_q:
-            yield last_tick
-        last_tick = tick
-        last_q = q
-    
-    yield last_tick
-
-#
-# It's probably better to use itertools.islice(seq, None, None, 12)
-#
-def annually(market_data_seq):
-    '''
-    Yield the last market data for each calendar year.
-
-    @market_data_seq is an iterable.  Each item contains a @date attribute
-    with a @year attribute.
-    '''
-    market_data = iter(market_data_seq)
-    last_tick = next(market_data)
-    last_year = last_tick.date.year
-    
-    for tick in market_data:
-        year = tick.date.year
-        if year != last_year:
-            yield last_tick
-        last_tick = tick
-        last_year = year
-    
-    yield last_tick
-
-#
 # For now, maintains its entire balance in shares of stock
 #
 # TODO: Should we round the number of shares (eg., to 5 places)?
