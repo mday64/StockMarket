@@ -4,7 +4,6 @@ import itertools
 import collections
 import csv
 import datetime
-from operator import attrgetter
 
 # See also more_itertools.windowed
 def subranges(iterable, length):
