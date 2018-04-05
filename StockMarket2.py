@@ -123,9 +123,17 @@ def read_yahoo(fn='^GSPC.csv'):
             except ValueError:
                 continue
 
-Decline = collections.namedtuple('Decline', 'peak trough recovery percent')
+class Decline(collections.namedtuple('Decline', 'peak trough recovery percent')):
+    def summarize(self):
+        peak, trough, recovery, percent = self
+        result = f'{peak.date}: {peak.close:7.2f}  '
+        result += f'{trough.date}: {trough.close:7.2f}  '
+        result += f'{recovery.date}: {recovery.close:7.2f}  '
+        result += f'{percent:6.2%}'
+        return result
 
-def declines(market_data_seq, price):
+# TODO: Should this take a @min_percent parameter?
+def declines(market_data_seq):
     market_data = iter(market_data_seq)
     tick = next(market_data)
     
@@ -134,41 +142,23 @@ def declines(market_data_seq, price):
             # Find the peak before the decline
             peak = tick
             tick = next(market_data)
-            while price(tick) > price(peak):
+            while tick.close > peak.close:
                 peak = tick
                 tick = next(market_data)
             
             # Find the trough and recovery points
             trough = tick
-            while price(tick) < price(peak):
-                if price(tick) < price(trough):
+            while tick.close < peak.close:
+                if tick.close < trough.close:
                     trough = tick
                 tick = next(market_data)
             recovery = tick
 
-            percent = (price(peak) - price(trough)) / price(peak)
+            percent = (peak.close - trough.close) / peak.close
 
             yield Decline(peak, trough, recovery, percent)
     except StopIteration:
         pass
-
-def shiller_declines(min_percent=0.05):
-    sp500_data = read_shiller()
-    for decline in declines(sp500_data, price=attrgetter('close')):
-        peak, trough, recovery, percent = decline
-        def summarize(tick):
-            return '{tick.date}: {tick.price:.2f}'.format(tick=tick)
-        if percent >= min_percent:
-            print('  '.join([summarize(tick) for tick in (peak, trough, recovery)]), '  {:.2%}'.format(percent))
-
-def gspc_declines(min_percent=0.05):
-    sp500_data = list(read_yahoo())
-    for decline in declines(sp500_data, price=attrgetter('close')):
-        peak, trough, recovery, percent = decline
-        def summarize(tick):
-            return '{tick.date}: {tick.close:.2f}'.format(tick=tick)
-        if percent >= min_percent:
-            print('  '.join([summarize(tick) for tick in (peak, trough, recovery)]), '  {:.2%}'.format(percent))
 
 #
 # For now, maintains its entire balance in shares of stock
@@ -279,9 +269,9 @@ def adjust_withdrawal_for_inflation(withdrawal_amount, balance_history):
     return withdrawal_amount
 
 def main():
-    # shiller_declines()
-    # gspc_declines()
-    pass
+    for decline in declines(read_yahoo()):
+        if decline.percent >= 0.05:
+            print(decline.summarize())
 
 if __name__ == '__main__':
     main()
