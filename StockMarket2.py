@@ -1,7 +1,7 @@
 #!python3
 
 import itertools
-import collections
+from collections import namedtuple
 import csv
 import datetime
 
@@ -70,7 +70,7 @@ def subranges(iterable, length):
 #
 
 # Is this the best name?  Should it be something like MarketData or ShillerData?
-SP500 = collections.namedtuple('SP500', 'date close dividend earnings CPI GS10 '+
+SP500 = namedtuple('SP500', 'date close dividend earnings CPI GS10 '+
     'real_price real_div real_earnings')
 
 # Refactor this a bit?
@@ -108,7 +108,7 @@ def read_shiller(fn="ie_data-2.csv"):
                 break
 
 # Should this be YahooData?
-YahooFinance = collections.namedtuple('YahooFinance', 'date open high low close adj_close volume')
+YahooFinance = namedtuple('YahooFinance', 'date open high low close adj_close volume')
 def read_yahoo(fn='^GSPC.csv'):
     with open(fn, mode='r') as f:
         reader = csv.reader(f)
@@ -122,7 +122,7 @@ def read_yahoo(fn='^GSPC.csv'):
             except ValueError:
                 continue
 
-class Decline(collections.namedtuple('Decline', 'peak trough recovery percent')):
+class Decline(namedtuple('Decline', 'peak trough recovery percent')):
     def summarize(self):
         peak, trough, recovery, percent = self
         result = f'{peak.date}: {peak.close:7.2f}  '
@@ -169,8 +169,7 @@ class Portfolio(object):
         self.shares = initial_balance / stock_price
     
     def balance(self, stock_price):
-        # TODO: Round to cents?
-        return self.shares * stock_price
+        return round(self.shares * stock_price, 2)
     
     def receive_dividend(self, dividend_per_share, stock_price):
         # Implicitly reinvests dividends
@@ -186,9 +185,12 @@ class Portfolio(object):
         return f'{self.__class__.__name__}(shares={self.shares})'
 
 #
-# TODO: Need a history of the portfolio balance, stock prices, and Consumer Price Index.
+# Used for a history of the portfolio balance, withdrawal, and Consumer Price Index.
 # Should that be a property of the Portfolio object, or should it be separate?
+# Should it include stock and/or bond prices?  If so, just include the Shiller data?
 #
+# NOTE: the balance item is the balance after the withdrawal
+PortfolioHistoryItem = namedtuple('PortfolioHistoryItem', 'date withdrawal balance stock_price cpi')
 
 #
 # I would like to be able to customize/parameterize the following:
@@ -215,57 +217,60 @@ class Portfolio(object):
 #
 # Maybe there should be a debug log associated with the output.  (See io.StringIO and logging)
 #
-# TODO: Simulate receiving of dividends
-#
-# TODO: The withdrawal rate should really be the initial withdrawal rate, specified as an
-# annual amount/percentage.
-#
-# TODO: Should the market data be quarterly or monthly?
-def simulate_withdrawals(market_data_seq, withdrawal_rate=0.01, initial_balance=1000000.00):
-    market_data = iter(market_data_seq)
-    tick = next(market_data)
-    portfolio = Portfolio(initial_balance, tick.close)
-    month = tick.date.month
-    withdrawal_amount = round(initial_balance * withdrawal_rate, 2)
-    balance_history = [(initial_balance, tick)]
+def simulate_withdrawals(market_data_seq,               # Assumes monthly Shiller data, over 1 retirement duration
+                         withdrawals_per_year = 4,
+                         annual_withdrawal_rate=0.04,
+                         initial_balance=1000000.00):
+    period_withdrawal_rate = annual_withdrawal_rate / withdrawals_per_year
+    period_withdrawal = round(initial_balance * period_withdrawal_rate, 2)
+    market_data = itertools.islice(market_data_seq, 0, None, 12//withdrawals_per_year)
+    history = []
     for tick in market_data:
-        portfolio.withdraw(withdrawal_amount, tick.close)
+        # Initialize the portfolio with the initial balance and stock price.
+        # NOTE: This should be done outside the loop.  Would need to "peek" at first tick.
+        if len(history) == 0:
+            portfolio = Portfolio(initial_balance, tick.close)
+        
+        # Adjust withdrawal amount annually.  TODO: Could this be every period?
+        # TODO: Allow adjustment algorithm to be specified externally
+        balance = portfolio.balance(tick.close)
+        if len(history) % withdrawals_per_year == 0 and len(history) > 0:
+            period_withdrawal = adjust_withdrawal_for_inflation(period_withdrawal, balance, withdrawals_per_year, tick, history)
+        
+        # Make the period's withdrawal
+        assert(balance > period_withdrawal)
+        portfolio.withdraw(period_withdrawal, tick.close)
+
+        # Receive dividends
+        portfolio.receive_dividend(tick.dividend/withdrawals_per_year, tick.close)
+
+        # Update the history
         balance = portfolio.balance(tick.close)
         assert balance >= 0
-        balance_history.append((balance, tick))
-        if tick.date.month == month:
-            # Adjust the withdrawal for inflation
-            withdrawal_amount = round(withdrawal_amount * 1.025, 2)
-    return balance_history        
+        history.append(PortfolioHistoryItem(tick.date, period_withdrawal, balance, tick.close, tick.CPI))
+    
+    return history
 
-def adjust_withdrawal_for_inflation(withdrawal_amount, balance_history):
-    # Suppose we're adjusting annually.  Month #0 is when retirement started.
-    # We would be making withdrawals on months #0, #3, #6, #9, #12, etc.
-    # Month #12 (the 13th month) is when we'd do the first adjustment.
+def adjust_withdrawal_for_inflation(period_withdrawal, balance, periods_per_year, tick, history):
+    # Called before the withdrawal has been made, so the next one can
+    # be adjusted.
+    #
+    # NOTE: Currently called annually, starting with the 1-year anniversary.
     #
     # Hmmm.  I wonder if the same function/object should be used to make the
     # withdrawals, and adjust the withdrawal amount?  That way, it could
     # consistently be quarterly, annually, or whatever.  It would be easy to
     # first make the adjustment, then make the withdrawal.  Perhaps the
     # withdrawal amount should be part of the history of the portfolio.
-    #
-    # Note that a different object needs to be responsible for maintaining
-    # the portfolio balance and asset composition.  For example, it might
-    # need to sell stocks to satisfy a withdrawal (in which case it needs
-    # to update the number of shares of stock).
 
-    months = len(balance_history)
-
-    # Has it been an integral number of years since the start?
-    if months > 12 and (months - 1) % 12 == 0:
-        # Adjust the withdrawal_amount by the last year's inflation
-        withdrawal_amount *= balance_history[-1][1].CPI / balance_history[-13][1].CPI
+    previous_cpi = history[-periods_per_year].cpi
+    period_withdrawal *= tick.CPI / previous_cpi
     
     # TODO: Add a rule to increase the withdrawal when the portfolio has grown enough (10%?)
     # TODO: Add a rule to decrease the withdrawal (slightly; 3-4%) after down years?
-    # Note: Both of the above should probably be controlled by options.
+    # NOTE: Both of the above should probably be controlled by options.
     
-    return withdrawal_amount
+    return round(period_withdrawal, 2)
 
 def main():
     for decline in declines(read_yahoo()):
