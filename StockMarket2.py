@@ -217,20 +217,17 @@ PortfolioHistoryItem = namedtuple('PortfolioHistoryItem', 'date withdrawal balan
 #
 # Maybe there should be a debug log associated with the output.  (See io.StringIO and logging)
 #
+# Returns a tuple: (success, history)
 def simulate_withdrawals(market_data_seq,               # Assumes monthly Shiller data, over 1 retirement duration
                          withdrawals_per_year = 4,
                          annual_withdrawal_rate=0.04,
                          initial_balance=1000000.00):
     period_withdrawal_rate = annual_withdrawal_rate / withdrawals_per_year
     period_withdrawal = round(initial_balance * period_withdrawal_rate, 2)
-    market_data = itertools.islice(market_data_seq, 0, None, 12//withdrawals_per_year)
+    market_data = list(market_data_seq)[::12//withdrawals_per_year]
+    portfolio = Portfolio(initial_balance, market_data[0].close)
     history = []
     for tick in market_data:
-        # Initialize the portfolio with the initial balance and stock price.
-        # NOTE: This should be done outside the loop.  Would need to "peek" at first tick.
-        if len(history) == 0:
-            portfolio = Portfolio(initial_balance, tick.close)
-        
         # Adjust withdrawal amount annually.  TODO: Could this be every period?
         # TODO: Allow adjustment algorithm to be specified externally
         balance = portfolio.balance(tick.close)
@@ -238,7 +235,8 @@ def simulate_withdrawals(market_data_seq,               # Assumes monthly Shille
             period_withdrawal = adjust_withdrawal_for_inflation(period_withdrawal, balance, withdrawals_per_year, tick, history)
         
         # Make the period's withdrawal
-        assert(balance > period_withdrawal)
+        if balance < period_withdrawal:
+            return (False, history)
         portfolio.withdraw(period_withdrawal, tick.close)
 
         # Receive dividends
@@ -249,7 +247,7 @@ def simulate_withdrawals(market_data_seq,               # Assumes monthly Shille
         assert balance >= 0
         history.append(PortfolioHistoryItem(tick.date, period_withdrawal, balance, tick.close, tick.CPI))
     
-    return history
+    return (True, history)
 
 def adjust_withdrawal_for_inflation(period_withdrawal, balance, periods_per_year, tick, history):
     # Called before the withdrawal has been made, so the next one can
