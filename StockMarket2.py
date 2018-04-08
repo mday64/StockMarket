@@ -190,7 +190,7 @@ class Portfolio(object):
 # Should it include stock and/or bond prices?  If so, just include the Shiller data?
 #
 # NOTE: the balance item is the balance after the withdrawal
-PortfolioHistoryItem = namedtuple('PortfolioHistoryItem', 'date withdrawal balance stock_price cpi')
+PortfolioHistoryItem = namedtuple('PortfolioHistoryItem', 'date withdrawal balance real_balance stock_price cpi')
 
 #
 # I would like to be able to customize/parameterize the following:
@@ -218,14 +218,16 @@ PortfolioHistoryItem = namedtuple('PortfolioHistoryItem', 'date withdrawal balan
 # Maybe there should be a debug log associated with the output.  (See io.StringIO and logging)
 #
 # Returns a tuple: (success, history)
+#
 def simulate_withdrawals(market_data_seq,               # Assumes monthly Shiller data, over 1 retirement duration
                          withdrawals_per_year = 4,
                          annual_withdrawal_rate=0.04,
                          initial_balance=1000000.00):
     period_withdrawal_rate = annual_withdrawal_rate / withdrawals_per_year
     period_withdrawal = round(initial_balance * period_withdrawal_rate, 2)
-    market_data = list(market_data_seq)[::12//withdrawals_per_year]
+    market_data = tuple(market_data_seq)[::12//withdrawals_per_year]
     portfolio = Portfolio(initial_balance, market_data[0].close)
+    initial_cpi = market_data[0].CPI
     history = []
     for tick in market_data:
         # Adjust withdrawal amount annually.  TODO: Could this be every period?
@@ -245,7 +247,8 @@ def simulate_withdrawals(market_data_seq,               # Assumes monthly Shille
         # Update the history
         balance = portfolio.balance(tick.close)
         assert balance >= 0
-        history.append(PortfolioHistoryItem(tick.date, period_withdrawal, balance, tick.close, tick.CPI))
+        real_balance = round(balance * initial_cpi / tick.CPI, 2)
+        history.append(PortfolioHistoryItem(tick.date, period_withdrawal, balance, real_balance, tick.close, tick.CPI))
     
     return (True, history)
 
@@ -269,6 +272,24 @@ def adjust_withdrawal_for_inflation(period_withdrawal, balance, periods_per_year
     # NOTE: Both of the above should probably be controlled by options.
     
     return round(period_withdrawal, 2)
+
+def sim_periods(market_data,                    # Assumes monthly Shiller data, over 1 retirement duration
+                period_length = 360,            # in months/samples
+                withdrawals_per_year = 4,
+                annual_withdrawal_rate=0.04,
+                initial_balance=1000000.00):
+    periods = []
+    for period in subranges(market_data, period_length):
+        success, history = simulate_withdrawals(
+                                period,
+                                withdrawals_per_year=withdrawals_per_year,
+                                annual_withdrawal_rate=annual_withdrawal_rate,
+                                initial_balance=initial_balance)
+        real_min = min(i.real_balance for i in history)
+        real_max = max(i.real_balance for i in history)
+        real_last = history[-1].real_balance
+        periods.append((success, real_min, real_max, real_last, history))
+    return periods
 
 def main():
     for decline in declines(read_yahoo()):
