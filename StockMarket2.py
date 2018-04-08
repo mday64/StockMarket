@@ -190,7 +190,8 @@ class Portfolio(object):
 # Should it include stock and/or bond prices?  If so, just include the Shiller data?
 #
 # NOTE: the balance item is the balance after the withdrawal
-PortfolioHistoryItem = namedtuple('PortfolioHistoryItem', 'date withdrawal balance real_balance stock_price cpi')
+# NOTE: withdrawal, balance and stock_price are all "real" (adjusted for inflation)
+PortfolioHistoryItem = namedtuple('PortfolioHistoryItem', 'date withdrawal balance stock_price cpi')
 
 #
 # I would like to be able to customize/parameterize the following:
@@ -247,9 +248,14 @@ def simulate_withdrawals(market_data_seq,               # Assumes monthly Shille
         # Update the history
         balance = portfolio.balance(tick.close)
         assert balance >= 0
-        real_balance = round(balance * initial_cpi / tick.CPI, 2)
-        history.append(PortfolioHistoryItem(tick.date, period_withdrawal, balance, real_balance, tick.close, tick.CPI))
-    
+
+        real_factor = initial_cpi / tick.CPI
+        real_balance = round(balance * real_factor, 2)
+        real_withdrawal = round(period_withdrawal * real_factor, 2)
+        real_stock_price = round(tick.close * real_factor, 2)
+
+        history.append(PortfolioHistoryItem(tick.date, real_withdrawal, real_balance, real_stock_price, tick.CPI))
+
     return (True, history)
 
 def adjust_withdrawal_for_inflation(period_withdrawal, balance, periods_per_year, tick, history):
@@ -285,10 +291,12 @@ def sim_periods(market_data,                    # Assumes monthly Shiller data, 
                                 withdrawals_per_year=withdrawals_per_year,
                                 annual_withdrawal_rate=annual_withdrawal_rate,
                                 initial_balance=initial_balance)
-        real_min = min(i.real_balance for i in history)
-        real_max = max(i.real_balance for i in history)
-        real_last = history[-1].real_balance
-        periods.append((success, real_min, real_max, real_last, history))
+        real_min = min(i.balance for i in history)
+        real_max = max(i.balance for i in history)
+        real_last = history[-1].balance
+        real_growth_rate = (real_last / initial_balance) ** (12/period_length)
+
+        periods.append((success, real_min, real_max, real_last, real_growth_rate, history))
     return periods
 
 def main():
