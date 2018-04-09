@@ -284,6 +284,11 @@ def sim_periods(market_data,                    # Assumes monthly Shiller data, 
                 withdrawals_per_year = 4,
                 annual_withdrawal_rate=0.04,
                 initial_balance=1000000.00):
+    # Get rid of any trailing market data that is incomplete
+    market_data = list(market_data)
+    while market_data[-1].dividend is None or market_data[-1].CPI is None:
+        del market_data[-1]
+    
     periods = []
     for period in subranges(market_data, period_length):
         success, history = simulate_withdrawals(
@@ -294,7 +299,7 @@ def sim_periods(market_data,                    # Assumes monthly Shiller data, 
         real_min = min(i.balance for i in history)
         real_max = max(i.balance for i in history)
         real_last = history[-1].balance
-        real_growth_rate = (real_last / initial_balance) ** (12/period_length)
+        real_growth_rate = ((real_last / initial_balance) ** (12/period_length)) - 1.0
 
         periods.append((success, real_min, real_max, real_last, real_growth_rate, history))
     return periods
