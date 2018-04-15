@@ -165,9 +165,12 @@ def declines(market_data_seq):
 #
 # TODO: Should we round the number of shares (eg., to 5 places)?
 #
+# TODO: Should there be a separate mechanism to set the current stock price?
+#
 class Portfolio(object):
-    def __init__(self, initial_balance, stock_price):
-        self.shares = initial_balance / stock_price
+    def __init__(self):
+        # TODO: Accept options to control how portfolio buys/sells stock
+        self.shares = 0
     
     def balance(self, stock_price):
         return round(self.shares * stock_price, 2)
@@ -179,6 +182,9 @@ class Portfolio(object):
         dividend_amount = self.shares * dividend_per_share
         self.shares += dividend_amount / stock_price
 
+    def deposit(self, amount, stock_price):
+        self.shares += amount / stock_price
+    
     def withdraw(self, amount, stock_price):
         self.shares -= amount / stock_price
     
@@ -224,9 +230,10 @@ PortfolioHistoryItem = namedtuple('PortfolioHistoryItem', 'date withdrawal balan
 # TODO: Should this be a method of the Portfolio object?  That would make it easier to share
 # state about the history of the portfolio.
 #
-# TODO: Portfolio history should include absolute/nominal balance as well as inflation-adjusted
-# ("real") balance.  Similarly for withdrawal history.  Is it useful for stock price to be
-# inflation adjusted?  Perhaps the portfolio should provide an inflation adjustment factor
+# TODO: Portfolio history (or should it be simulation history?) should include
+# absolute/nominal balance as well as inflation-adjusted ("real") balance.
+# Similarly for withdrawal history.  Is it useful for stock price to be inflation
+# adjusted?  Perhaps the portfolio should provide an inflation adjustment factor
 # (for a stock tick, or in the history?).
 def simulate_withdrawals(market_data_seq,               # Assumes monthly Shiller data, over 1 retirement duration
                          withdrawals_per_year = 4,
@@ -235,7 +242,8 @@ def simulate_withdrawals(market_data_seq,               # Assumes monthly Shille
     period_withdrawal_rate = annual_withdrawal_rate / withdrawals_per_year
     period_withdrawal = round(initial_balance * period_withdrawal_rate, 2)
     market_data = tuple(market_data_seq)[::12//withdrawals_per_year]
-    portfolio = Portfolio(initial_balance, market_data[0].close)
+    portfolio = Portfolio()
+    portfolio.deposit(initial_balance, market_data[0].close)
     initial_cpi = market_data[0].CPI
     history = []
     for tick in market_data:
