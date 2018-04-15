@@ -4,6 +4,7 @@ import itertools
 from collections import namedtuple
 import csv
 import datetime
+import statistics
 
 # See also more_itertools.windowed
 def subranges(iterable, length):
@@ -220,6 +221,13 @@ PortfolioHistoryItem = namedtuple('PortfolioHistoryItem', 'date withdrawal balan
 #
 # Returns a tuple: (success, history)
 #
+# TODO: Should this be a method of the Portfolio object?  That would make it easier to share
+# state about the history of the portfolio.
+#
+# TODO: Portfolio history should include absolute/nominal balance as well as inflation-adjusted
+# ("real") balance.  Similarly for withdrawal history.  Is it useful for stock price to be
+# inflation adjusted?  Perhaps the portfolio should provide an inflation adjustment factor
+# (for a stock tick, or in the history?).
 def simulate_withdrawals(market_data_seq,               # Assumes monthly Shiller data, over 1 retirement duration
                          withdrawals_per_year = 4,
                          annual_withdrawal_rate=0.04,
@@ -279,7 +287,13 @@ def adjust_withdrawal_for_inflation(period_withdrawal, balance, periods_per_year
     
     return round(period_withdrawal, 2)
 
-def sim_periods(market_data,                    # Assumes monthly Shiller data, over 1 retirement duration
+PeriodsResult = namedtuple('PeriodsResult', [
+    'survivability', 'sustainability',
+    'balance_cgr_median', 'balance_cgr_mean', 'balance_cgr_std',
+    'withdrawal_cgr_median', 'withdrawal_cgr_mean', 'withdrawal_cgr_std',
+    'periods'])
+Period = namedtuple('Period', 'survived sustained min_real max_real last_real growth_rate_real history')
+def sim_periods(market_data,                    # Assumes monthly Shiller data
                 period_length = 360,            # in months/samples
                 withdrawals_per_year = 4,
                 annual_withdrawal_rate=0.04,
@@ -289,6 +303,11 @@ def sim_periods(market_data,                    # Assumes monthly Shiller data, 
     while market_data[-1].dividend is None or market_data[-1].CPI is None:
         del market_data[-1]
     
+    # NOTE: "sustainability" is redundant.  Look at balance growth rate >= 0.
+    survived = []           # True/False whether each period was able to make all withdrawals
+    sustained = []          # True/False whether each period's ending real balance was at least as large as the initial balance
+    balance_growth = []     # Compound Annual Growth Rate for each period's real portfolio balance
+    withdrawal_growth = []  # Compound Annual Growth Rate for each period's real withdrawal
     periods = []
     for period in subranges(market_data, period_length):
         success, history = simulate_withdrawals(
@@ -299,10 +318,37 @@ def sim_periods(market_data,                    # Assumes monthly Shiller data, 
         real_min = min(i.balance for i in history)
         real_max = max(i.balance for i in history)
         real_last = history[-1].balance
-        real_growth_rate = ((real_last / initial_balance) ** (12/period_length)) - 1.0
+        balance_growth_rate = ((real_last / initial_balance) ** (12/period_length)) - 1.0
+        withdrawal_growth_rate = ((history[-1].withdrawal / history[0].withdrawal) ** (12/period_length)) - 1.0
+        sustain = real_last >= initial_balance
 
-        periods.append((success, real_min, real_max, real_last, real_growth_rate, history))
-    return periods
+        periods.append(Period(success, sustain, real_min, real_max, real_last, balance_growth_rate, history))
+
+        survived.append(success)
+        sustained.append(sustain)
+        if success:
+            balance_growth.append(balance_growth_rate)
+            withdrawal_growth.append(withdrawal_growth_rate)
+
+    # Some statistics I'd like:
+    #   * Survivability rate (what percentage of periods lasted long enough?)
+    #   * Sustainability rate (what percentage of periods ended with at least the original amount, inflation adjusted?)
+    #   * Mean/median ending withdrawal amount (real dollars).  Should it be a compound annual growth rate?
+    #     If a growth rate, use harmonic mean instead of ordinary mean.
+    #   Should the mean/stdev/median statistics apply only to periods that succeeded?
+    survival_rate = sum(survived) / len(survived)
+    sustain_rate = sum(sustained) / len(sustained)
+    balance_mean = statistics.mean(balance_growth)
+    balance_stdev = statistics.stdev(balance_growth, xbar=balance_mean)
+    balance_median = statistics.median(balance_growth)
+    withdraw_mean = statistics.mean(withdrawal_growth)
+    withdraw_stdev = statistics.stdev(withdrawal_growth, xbar=withdraw_mean)
+    withdraw_median = statistics.median(withdrawal_growth)
+
+    return PeriodsResult(survival_rate, sustain_rate,
+        balance_median, balance_mean, balance_stdev,
+        withdraw_median, withdraw_mean, withdraw_stdev,
+        periods)
 
 def main():
     for decline in declines(read_yahoo()):
