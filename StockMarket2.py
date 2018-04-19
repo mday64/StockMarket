@@ -166,30 +166,8 @@ def declines(market_data_seq):
 # TODO: Should we round the number of shares (eg., to 5 places)?
 #
 # TODO: Should there be a separate mechanism to set the current stock price?
+#       That would enable us to have a more accurate max_balance.
 #
-class Portfolio(object):
-    def __init__(self):
-        # TODO: Accept options to control how portfolio buys/sells stock
-        self.shares = 0
-    
-    def balance(self, stock_price):
-        return round(self.shares * stock_price, 2)
-    
-    def receive_dividend(self, dividend_per_share, stock_price):
-        # Implicitly reinvests dividends
-        # Note: caller is responsible for determining the amount of the
-        # dividend per period (for each time this method is called).
-        dividend_amount = self.shares * dividend_per_share
-        self.shares += dividend_amount / stock_price
-
-    def deposit(self, amount, stock_price):
-        self.shares += amount / stock_price
-    
-    def withdraw(self, amount, stock_price):
-        self.shares -= amount / stock_price
-    
-    def __repr__(self):
-        return f'{self.__class__.__name__}(shares={self.shares})'
 
 #
 # Used for a history of the portfolio balance, withdrawal, and Consumer Price Index.
@@ -199,6 +177,241 @@ class Portfolio(object):
 # NOTE: the balance item is the balance after the withdrawal
 # NOTE: withdrawal, balance and stock_price are all "real" (adjusted for inflation)
 PortfolioHistoryItem = namedtuple('PortfolioHistoryItem', 'date withdrawal balance stock_price cpi')
+
+PeriodsResult = namedtuple('PeriodsResult', [
+    'survivability', 'sustainability',
+    'balance_cgr_median', 'balance_cgr_mean', 'balance_cgr_std',
+    'withdrawal_cgr_median', 'withdrawal_cgr_mean', 'withdrawal_cgr_std',
+    'periods'])
+Period = namedtuple('Period', 'survived sustained min_real max_real last_real growth_rate_real history')
+# TODO: Period should contain the period start date
+
+class Portfolio(object):
+    def __init__(self,
+                 withdrawals_per_year = 4,
+                 annual_withdrawal_rate=0.04,
+                 initial_balance=1000000.00,
+                 cash_cushion = False,
+                 cash_cushion_target = 3,
+                 cash_use_threshold = 0.90,
+                 cash_rebuild_threshold = 1.0,
+                 cash_rebuild_rate = 1.5):
+        self.shares = 0.0       # Number of shares of stock
+        self.cash = 0.0         # Amount of cash, in dollars
+        self.max_balance = 0.0  # Highest balance seen previously  TODO: Part of balance history?
+        self.withdrawals_per_year = withdrawals_per_year
+        self.annual_withdrawal_rate = annual_withdrawal_rate
+        self.initial_balance = initial_balance
+        self.annual_withdrawal = initial_balance * annual_withdrawal_rate
+        self.cash_cushion = cash_cushion
+        self.cash_cushion_target = cash_cushion_target
+        self.cash_use_threshold = cash_use_threshold
+        self.cash_rebuild_threshold = cash_rebuild_threshold
+        self.cash_rebuild_rate = cash_rebuild_rate
+    #
+    # A Cash Cushion: keeping part of the portfolio in cash, to be used
+    # during market declines.
+    #
+    # cash_cushion: False
+    #   Set to true to enable a cash cushion.  (Note: we could derive
+    #   this from cash cushion target; 0 means no cushion.  My intuition
+    #   says that a separate flag is better.)
+    # cash_cushion_target: 3
+    #   The desired amount of cash, relative to the annual withdrawal amount
+    # cash_use_threshold: 0.90
+    #   A percentage of maximum portfolio value.  If the portfolio's
+    #   value drops below this amount, use cash instead of selling stock
+    #   to make a withdrawal.  If the portfolio is above this value,
+    #   sell stock to make withdrawals.
+    # cash_rebuild_threshold: 1.0
+    #   A percentage of (prior) maximum portfolio value.  If the
+    #   portfolio value exceeds this amount, and the cash cushion is
+    #   below the cash cushion target, then sell some additional stock
+    #   at each withdrawal to rebuild the cash cushion.
+    #
+    #   If this value is > 1.0, should it be relative to the balance
+    #   at the start of the last decline?
+    # cash_rebuild_rate: 1.5
+    #   When selling additional stock to rebuild cash, sell this times
+    #   as much as would normally be needed for withdrawal (but never
+    #   more than is needed to bring cash to the target level).
+    #   Ah!  That implies we don't need to know the desired withdrawal
+    #   rate relative to portfolio value.  Note: This rate minus 1.0
+    #   is the amount of the additional stock sale.
+    #
+    # If the portfolio value is only slightly higher than the rebuild
+    # threshold, should we rebuild cash at a rate less than the rebuild
+    # rate?  For example, should we only sell stock in the amount of
+    # current portfolio minus prior maximum, plus enough for the withdrawal?
+    #
+    # Should the cash cushion target (and the cash use threshold and cash
+    # rebuild threshold) be relative to the portfolio balance (stock + cash),
+    # or relative to the value of the stock?  If relative to stock, then
+    # computing the cash amount at deposit time (and the dollar target when
+    # rebuilding) is slightly more complicated.
+    #
+
+    def balance(self, stock_price):
+        return round(self.cash + self.shares * stock_price, 2)
+    
+    def init(self, stock_price):
+        # TODO: Should we use self.initial_balance instead of "amount"?
+        if self.cash_cushion:
+            self.cash = self.cash_cushion_target * self.annual_withdrawal
+            self.shares = (self.initial_balance - self.cash) / stock_price
+        else:
+            self.cash = 0.0
+            self.shares = self.initial_balance / stock_price
+        # TODO: Should we also reset history, max balance, etc?
+        self.max_balance = 0.0  # Highest balance seen previously  TODO: Part of balance history?
+    
+    def receive_dividend(self, dividend_per_share, stock_price):
+        # Implicitly reinvests dividends
+        # Note: caller is responsible for determining the amount of the
+        # dividend per period (for each time this method is called).
+        dividend_amount = self.shares * dividend_per_share
+        self.shares += dividend_amount / stock_price
+
+    def withdraw(self, amount, stock_price):
+        balance = self.balance(stock_price)
+        if balance < amount:
+            raise ValueError(f'Insufficient funds.  Withdrawal={amount}, balance={balance}')
+        if self.cash_cushion and balance < self.max_balance * self.cash_use_threshold:
+            # Try to use the cash cushion to satisfy the withdrawal
+            if self.cash >= amount:
+                self.cash -= amount
+            else:
+                self.shares -= (amount - self.cash) / stock_price
+                self.cash = 0.0
+        elif (self.cash_cushion and
+                balance - amount >= self.max_balance * self.cash_rebuild_threshold and
+                self.cash < self.annual_withdrawal * self.cash_cushion_target):
+            # Rebuild the cash cushion
+            cash_add = min(self.annual_withdrawal * self.cash_cushion_target - self.cash,
+                           amount * (self.cash_rebuild_rate - 1.0),
+                           balance - self.max_balance)
+            self.shares -= (amount + cash_add) / stock_price
+            assert(self.shares >= 0)
+            self.cash += cash_add
+        else:
+            # Sell stock to fund the withdrawal
+            self.shares -= amount / stock_price
+            balance -= amount
+            if balance > self.max_balance:
+                self.max_balance = balance
+    
+    def __repr__(self):
+        return f'{self.__class__.__name__}(shares={self.shares})'
+    
+    def adjust_withdrawal_for_inflation(self, period_withdrawal, tick, history):
+        # Called before the withdrawal has been made, so the next one can
+        # be adjusted.
+        #
+        # NOTE: Currently called annually, starting with the 1-year anniversary.
+        #
+        # Hmmm.  I wonder if the same function/object should be used to make the
+        # withdrawals, and adjust the withdrawal amount?  That way, it could
+        # consistently be quarterly, annually, or whatever.  It would be easy to
+        # first make the adjustment, then make the withdrawal.  Perhaps the
+        # withdrawal amount should be part of the history of the portfolio.
+
+        previous_cpi = history[-self.withdrawals_per_year].cpi
+        period_withdrawal *= tick.CPI / previous_cpi
+        
+        # TODO: Add a rule to increase the withdrawal when the portfolio has grown enough (10%?)
+        # TODO: Add a rule to decrease the withdrawal (slightly; 3-4%) after down years?
+        # NOTE: Both of the above should probably be controlled by options.
+        
+        return round(period_withdrawal, 2)
+    
+    def simulate_withdrawals(self,
+                             market_data_seq):          # Assumes montly Shiller data, length of one retirement
+        period_withdrawal = round(self.annual_withdrawal / self.withdrawals_per_year, 2)
+        market_data = tuple(market_data_seq)[::12//self.withdrawals_per_year]
+        self.init(market_data[0].close)
+        initial_cpi = market_data[0].CPI
+        history = []
+        for tick in market_data:
+            # Adjust withdrawal amount annually.  TODO: Could this be every period?
+            # TODO: Allow adjustment algorithm to be specified externally
+            balance = self.balance(tick.close)
+            if len(history) % self.withdrawals_per_year == 0 and len(history) > 0:
+                period_withdrawal = self.adjust_withdrawal_for_inflation(period_withdrawal, tick, history)
+                # TODO: Update self.annual_withdrawal
+                # TODO: Should period_withdrawal be a member variable?
+            
+            # Make the period's withdrawal
+            if balance < period_withdrawal:
+                return (False, history)
+            self.withdraw(period_withdrawal, tick.close)
+
+            # Receive dividends
+            self.receive_dividend(tick.dividend/self.withdrawals_per_year, tick.close)
+
+            # Update the history
+            balance = self.balance(tick.close)
+            assert balance >= 0
+
+            real_factor = initial_cpi / tick.CPI
+            real_balance = round(balance * real_factor, 2)
+            real_withdrawal = round(period_withdrawal * real_factor, 2)
+            real_stock_price = round(tick.close * real_factor, 2)
+
+            history.append(PortfolioHistoryItem(tick.date, real_withdrawal, real_balance, real_stock_price, tick.CPI))
+
+        return (True, history)
+
+    def sim_periods(self,
+                    market_data,                    # Assumes monthly Shiller data
+                    period_length = 360):           # in months/samples
+        # Get rid of any trailing market data that is incomplete
+        market_data = list(market_data)
+        while market_data[-1].dividend is None or market_data[-1].CPI is None:
+            del market_data[-1]
+        
+        # NOTE: "sustainability" is redundant.  Look at real balance growth rate >= 0.
+        survived = []           # True/False whether each period was able to make all withdrawals
+        sustained = []          # True/False whether each period's ending real balance was at least as large as the initial balance
+        balance_growth = []     # Compound Annual Growth Rate for each period's real portfolio balance
+        withdrawal_growth = []  # Compound Annual Growth Rate for each period's real withdrawal
+        periods = []
+        for period in subranges(market_data, period_length):
+            success, history = self.simulate_withdrawals(period)
+            real_min = min(i.balance for i in history)
+            real_max = max(i.balance for i in history)
+            real_last = history[-1].balance
+            balance_growth_rate = ((real_last / self.initial_balance) ** (12/period_length)) - 1.0
+            withdrawal_growth_rate = ((history[-1].withdrawal / history[0].withdrawal) ** (12/period_length)) - 1.0
+            sustain = real_last >= self.initial_balance
+
+            periods.append(Period(success, sustain, real_min, real_max, real_last, balance_growth_rate, history))
+
+            survived.append(success)
+            sustained.append(sustain)
+            if success:
+                balance_growth.append(balance_growth_rate)
+                withdrawal_growth.append(withdrawal_growth_rate)
+
+        # Some statistics I'd like:
+        #   * Survivability rate (what percentage of periods lasted long enough?)
+        #   * Sustainability rate (what percentage of periods ended with at least the original amount, inflation adjusted?)
+        #   * Mean/median ending withdrawal amount (real dollars).  Should it be a compound annual growth rate?
+        #     If a growth rate, use harmonic mean instead of ordinary mean.
+        #   Should the mean/stdev/median statistics apply only to periods that succeeded?
+        survival_rate = sum(survived) / len(survived)
+        sustain_rate = sum(sustained) / len(sustained)
+        balance_mean = statistics.mean(balance_growth)
+        balance_stdev = statistics.stdev(balance_growth, xbar=balance_mean)
+        balance_median = statistics.median(balance_growth)
+        withdraw_mean = statistics.mean(withdrawal_growth)
+        withdraw_stdev = statistics.stdev(withdrawal_growth, xbar=withdraw_mean)
+        withdraw_median = statistics.median(withdrawal_growth)
+
+        return PeriodsResult(survival_rate, sustain_rate,
+            balance_median, balance_mean, balance_stdev,
+            withdraw_median, withdraw_mean, withdraw_stdev,
+            periods)
+
 
 #
 # I would like to be able to customize/parameterize the following:
@@ -235,128 +448,122 @@ PortfolioHistoryItem = namedtuple('PortfolioHistoryItem', 'date withdrawal balan
 # Similarly for withdrawal history.  Is it useful for stock price to be inflation
 # adjusted?  Perhaps the portfolio should provide an inflation adjustment factor
 # (for a stock tick, or in the history?).
-def simulate_withdrawals(market_data_seq,               # Assumes monthly Shiller data, over 1 retirement duration
-                         withdrawals_per_year = 4,
-                         annual_withdrawal_rate=0.04,
-                         initial_balance=1000000.00):
-    period_withdrawal_rate = annual_withdrawal_rate / withdrawals_per_year
-    period_withdrawal = round(initial_balance * period_withdrawal_rate, 2)
-    market_data = tuple(market_data_seq)[::12//withdrawals_per_year]
-    portfolio = Portfolio()
-    portfolio.deposit(initial_balance, market_data[0].close)
-    initial_cpi = market_data[0].CPI
-    history = []
-    for tick in market_data:
-        # Adjust withdrawal amount annually.  TODO: Could this be every period?
-        # TODO: Allow adjustment algorithm to be specified externally
-        balance = portfolio.balance(tick.close)
-        if len(history) % withdrawals_per_year == 0 and len(history) > 0:
-            period_withdrawal = adjust_withdrawal_for_inflation(period_withdrawal, balance, withdrawals_per_year, tick, history)
+# def simulate_withdrawals(market_data_seq,               # Assumes monthly Shiller data, over 1 retirement duration
+#                          withdrawals_per_year = 4,
+#                          annual_withdrawal_rate=0.04,
+#                          initial_balance=1000000.00):
+#     period_withdrawal_rate = annual_withdrawal_rate / withdrawals_per_year
+#     period_withdrawal = round(initial_balance * period_withdrawal_rate, 2)
+#     market_data = tuple(market_data_seq)[::12//withdrawals_per_year]
+#     portfolio = Portfolio(withdrawals_per_year=withdrawals_per_year, annual_withdrawal_rate=annual_withdrawal_rate, initial_balance=initial_balance)
+#     portfolio.init(market_data[0].close)
+#     initial_cpi = market_data[0].CPI
+#     history = []
+#     for tick in market_data:
+#         # Adjust withdrawal amount annually.  TODO: Could this be every period?
+#         # TODO: Allow adjustment algorithm to be specified externally
+#         balance = portfolio.balance(tick.close)
+#         if len(history) % withdrawals_per_year == 0 and len(history) > 0:
+#             period_withdrawal = adjust_withdrawal_for_inflation(period_withdrawal, balance, withdrawals_per_year, tick, history)
         
-        # Make the period's withdrawal
-        if balance < period_withdrawal:
-            return (False, history)
-        portfolio.withdraw(period_withdrawal, tick.close)
+#         # Make the period's withdrawal
+#         if balance < period_withdrawal:
+#             return (False, history)
+#         portfolio.withdraw(period_withdrawal, tick.close)
 
-        # Receive dividends
-        portfolio.receive_dividend(tick.dividend/withdrawals_per_year, tick.close)
+#         # Receive dividends
+#         portfolio.receive_dividend(tick.dividend/withdrawals_per_year, tick.close)
 
-        # Update the history
-        balance = portfolio.balance(tick.close)
-        assert balance >= 0
+#         # Update the history
+#         balance = portfolio.balance(tick.close)
+#         assert balance >= 0
 
-        real_factor = initial_cpi / tick.CPI
-        real_balance = round(balance * real_factor, 2)
-        real_withdrawal = round(period_withdrawal * real_factor, 2)
-        real_stock_price = round(tick.close * real_factor, 2)
+#         real_factor = initial_cpi / tick.CPI
+#         real_balance = round(balance * real_factor, 2)
+#         real_withdrawal = round(period_withdrawal * real_factor, 2)
+#         real_stock_price = round(tick.close * real_factor, 2)
 
-        history.append(PortfolioHistoryItem(tick.date, real_withdrawal, real_balance, real_stock_price, tick.CPI))
+#         history.append(PortfolioHistoryItem(tick.date, real_withdrawal, real_balance, real_stock_price, tick.CPI))
 
-    return (True, history)
+#     return (True, history)
 
-def adjust_withdrawal_for_inflation(period_withdrawal, balance, periods_per_year, tick, history):
-    # Called before the withdrawal has been made, so the next one can
-    # be adjusted.
-    #
-    # NOTE: Currently called annually, starting with the 1-year anniversary.
-    #
-    # Hmmm.  I wonder if the same function/object should be used to make the
-    # withdrawals, and adjust the withdrawal amount?  That way, it could
-    # consistently be quarterly, annually, or whatever.  It would be easy to
-    # first make the adjustment, then make the withdrawal.  Perhaps the
-    # withdrawal amount should be part of the history of the portfolio.
+# def adjust_withdrawal_for_inflation(period_withdrawal, balance, periods_per_year, tick, history):
+#     # Called before the withdrawal has been made, so the next one can
+#     # be adjusted.
+#     #
+#     # NOTE: Currently called annually, starting with the 1-year anniversary.
+#     #
+#     # Hmmm.  I wonder if the same function/object should be used to make the
+#     # withdrawals, and adjust the withdrawal amount?  That way, it could
+#     # consistently be quarterly, annually, or whatever.  It would be easy to
+#     # first make the adjustment, then make the withdrawal.  Perhaps the
+#     # withdrawal amount should be part of the history of the portfolio.
 
-    previous_cpi = history[-periods_per_year].cpi
-    period_withdrawal *= tick.CPI / previous_cpi
+    # previous_cpi = history[-periods_per_year].cpi
+    # period_withdrawal *= tick.CPI / previous_cpi
     
-    # TODO: Add a rule to increase the withdrawal when the portfolio has grown enough (10%?)
-    # TODO: Add a rule to decrease the withdrawal (slightly; 3-4%) after down years?
-    # NOTE: Both of the above should probably be controlled by options.
+    # # TODO: Add a rule to increase the withdrawal when the portfolio has grown enough (10%?)
+    # # TODO: Add a rule to decrease the withdrawal (slightly; 3-4%) after down years?
+    # # NOTE: Both of the above should probably be controlled by options.
     
-    return round(period_withdrawal, 2)
+    # return round(period_withdrawal, 2)
 
-PeriodsResult = namedtuple('PeriodsResult', [
-    'survivability', 'sustainability',
-    'balance_cgr_median', 'balance_cgr_mean', 'balance_cgr_std',
-    'withdrawal_cgr_median', 'withdrawal_cgr_mean', 'withdrawal_cgr_std',
-    'periods'])
-Period = namedtuple('Period', 'survived sustained min_real max_real last_real growth_rate_real history')
-def sim_periods(market_data,                    # Assumes monthly Shiller data
-                period_length = 360,            # in months/samples
-                withdrawals_per_year = 4,
-                annual_withdrawal_rate=0.04,
-                initial_balance=1000000.00):
-    # Get rid of any trailing market data that is incomplete
-    market_data = list(market_data)
-    while market_data[-1].dividend is None or market_data[-1].CPI is None:
-        del market_data[-1]
+# def sim_periods(market_data,                    # Assumes monthly Shiller data
+#                 period_length = 360,            # in months/samples
+#                 withdrawals_per_year = 4,
+#                 annual_withdrawal_rate=0.04,
+#                 initial_balance=1000000.00):
+#     # Get rid of any trailing market data that is incomplete
+#     market_data = list(market_data)
+#     while market_data[-1].dividend is None or market_data[-1].CPI is None:
+#         del market_data[-1]
     
-    # NOTE: "sustainability" is redundant.  Look at balance growth rate >= 0.
-    survived = []           # True/False whether each period was able to make all withdrawals
-    sustained = []          # True/False whether each period's ending real balance was at least as large as the initial balance
-    balance_growth = []     # Compound Annual Growth Rate for each period's real portfolio balance
-    withdrawal_growth = []  # Compound Annual Growth Rate for each period's real withdrawal
-    periods = []
-    for period in subranges(market_data, period_length):
-        success, history = simulate_withdrawals(
-                                period,
-                                withdrawals_per_year=withdrawals_per_year,
-                                annual_withdrawal_rate=annual_withdrawal_rate,
-                                initial_balance=initial_balance)
-        real_min = min(i.balance for i in history)
-        real_max = max(i.balance for i in history)
-        real_last = history[-1].balance
-        balance_growth_rate = ((real_last / initial_balance) ** (12/period_length)) - 1.0
-        withdrawal_growth_rate = ((history[-1].withdrawal / history[0].withdrawal) ** (12/period_length)) - 1.0
-        sustain = real_last >= initial_balance
+#     # NOTE: "sustainability" is redundant.  Look at balance growth rate >= 0.
+#     survived = []           # True/False whether each period was able to make all withdrawals
+#     sustained = []          # True/False whether each period's ending real balance was at least as large as the initial balance
+#     balance_growth = []     # Compound Annual Growth Rate for each period's real portfolio balance
+#     withdrawal_growth = []  # Compound Annual Growth Rate for each period's real withdrawal
+#     periods = []
+#     for period in subranges(market_data, period_length):
+#         success, history = simulate_withdrawals(
+#                                 period,
+#                                 withdrawals_per_year=withdrawals_per_year,
+#                                 annual_withdrawal_rate=annual_withdrawal_rate,
+#                                 initial_balance=initial_balance)
+#         real_min = min(i.balance for i in history)
+#         real_max = max(i.balance for i in history)
+#         real_last = history[-1].balance
+#         balance_growth_rate = ((real_last / initial_balance) ** (12/period_length)) - 1.0
+#         withdrawal_growth_rate = ((history[-1].withdrawal / history[0].withdrawal) ** (12/period_length)) - 1.0
+#         sustain = real_last >= initial_balance
 
-        periods.append(Period(success, sustain, real_min, real_max, real_last, balance_growth_rate, history))
+#         periods.append(Period(success, sustain, real_min, real_max, real_last, balance_growth_rate, history))
 
-        survived.append(success)
-        sustained.append(sustain)
-        if success:
-            balance_growth.append(balance_growth_rate)
-            withdrawal_growth.append(withdrawal_growth_rate)
+#         survived.append(success)
+#         sustained.append(sustain)
+#         if success:
+#             balance_growth.append(balance_growth_rate)
+#             withdrawal_growth.append(withdrawal_growth_rate)
 
-    # Some statistics I'd like:
-    #   * Survivability rate (what percentage of periods lasted long enough?)
-    #   * Sustainability rate (what percentage of periods ended with at least the original amount, inflation adjusted?)
-    #   * Mean/median ending withdrawal amount (real dollars).  Should it be a compound annual growth rate?
-    #     If a growth rate, use harmonic mean instead of ordinary mean.
-    #   Should the mean/stdev/median statistics apply only to periods that succeeded?
-    survival_rate = sum(survived) / len(survived)
-    sustain_rate = sum(sustained) / len(sustained)
-    balance_mean = statistics.mean(balance_growth)
-    balance_stdev = statistics.stdev(balance_growth, xbar=balance_mean)
-    balance_median = statistics.median(balance_growth)
-    withdraw_mean = statistics.mean(withdrawal_growth)
-    withdraw_stdev = statistics.stdev(withdrawal_growth, xbar=withdraw_mean)
-    withdraw_median = statistics.median(withdrawal_growth)
+#     # Some statistics I'd like:
+#     #   * Survivability rate (what percentage of periods lasted long enough?)
+#     #   * Sustainability rate (what percentage of periods ended with at least the original amount, inflation adjusted?)
+#     #   * Mean/median ending withdrawal amount (real dollars).  Should it be a compound annual growth rate?
+#     #     If a growth rate, use harmonic mean instead of ordinary mean.
+#     #   Should the mean/stdev/median statistics apply only to periods that succeeded?
+#     survival_rate = sum(survived) / len(survived)
+#     sustain_rate = sum(sustained) / len(sustained)
+#     balance_mean = statistics.mean(balance_growth)
+#     balance_stdev = statistics.stdev(balance_growth, xbar=balance_mean)
+#     balance_median = statistics.median(balance_growth)
+#     withdraw_mean = statistics.mean(withdrawal_growth)
+#     withdraw_stdev = statistics.stdev(withdrawal_growth, xbar=withdraw_mean)
+#     withdraw_median = statistics.median(withdrawal_growth)
 
-    return PeriodsResult(survival_rate, sustain_rate,
-        balance_median, balance_mean, balance_stdev,
-        withdraw_median, withdraw_mean, withdraw_stdev,
-        periods)
+#     return PeriodsResult(survival_rate, sustain_rate,
+#         balance_median, balance_mean, balance_stdev,
+#         withdraw_median, withdraw_mean, withdraw_stdev,
+#         periods)
 
 def main():
     for decline in declines(read_yahoo()):
