@@ -195,7 +195,8 @@ class Portfolio(object):
                  cash_cushion_target = 3,
                  cash_use_threshold = 0.90,
                  cash_rebuild_threshold = 1.0,
-                 cash_rebuild_rate = 1.5):
+                 cash_rebuild_rate = 1.5,
+                 verbose = False):
         self.shares = 0.0       # Number of shares of stock
         self.cash = 0.0         # Amount of cash, in dollars
         self.max_balance = 0.0  # Highest balance seen previously  TODO: Part of balance history?
@@ -208,6 +209,7 @@ class Portfolio(object):
         self.cash_use_threshold = cash_use_threshold
         self.cash_rebuild_threshold = cash_rebuild_threshold
         self.cash_rebuild_rate = cash_rebuild_rate
+        self.verbose = verbose
     #
     # A Cash Cushion: keeping part of the portfolio in cash, to be used
     # during market declines.
@@ -264,6 +266,8 @@ class Portfolio(object):
             self.shares = self.initial_balance / stock_price
         # TODO: Should we also reset history, max balance, etc?
         self.max_balance = 0.0  # Highest balance seen previously  TODO: Part of balance history?
+        if self.verbose:
+            print(f"init: cash=${self.cash:,.2f}, shares={self.shares:,.2f}")
     
     def receive_dividend(self, dividend_per_share, stock_price):
         # Implicitly reinvests dividends
@@ -271,16 +275,22 @@ class Portfolio(object):
         # dividend per period (for each time this method is called).
         dividend_amount = self.shares * dividend_per_share
         self.shares += dividend_amount / stock_price
-
+        if self.verbose:
+            print(f"receive_dividend: dividend=${dividend_amount:,.2f}, shares={self.shares:,.2f}")
+    
     def withdraw(self, amount, stock_price):
         balance = self.balance(stock_price)
         if balance < amount:
-            raise ValueError(f'Insufficient funds.  Withdrawal={amount}, balance={balance}')
+            raise ValueError(f'Insufficient funds.  Withdrawal={amount:,.2f}, balance={balance:,.2f}')
         if self.cash_cushion and balance < self.max_balance * self.cash_use_threshold:
             # Try to use the cash cushion to satisfy the withdrawal
             if self.cash >= amount:
                 self.cash -= amount
+                if self.verbose:
+                    print(f"withdraw: (using cushion) cash ${amount:,.2f}")
             else:
+                if self.verbose:
+                    print(f"withdraw: (using cushion) cash ${self.cash:,.2f}, stock ${amount-self.cash:,.2f}")
                 self.shares -= (amount - self.cash) / stock_price
                 self.cash = 0.0
         elif (self.cash_cushion and
@@ -290,15 +300,21 @@ class Portfolio(object):
             cash_add = min(self.annual_withdrawal * self.cash_cushion_target - self.cash,
                            amount * (self.cash_rebuild_rate - 1.0),
                            balance - self.max_balance)
-            self.shares -= (amount + cash_add) / stock_price
+            num_shares = (amount + cash_add) / stock_price
+            self.shares -= num_shares
             assert(self.shares >= 0)
             self.cash += cash_add
+            if self.verbose:
+                print(f"withdraw: (rebuild cushion) selling {num_shares} shares; adding ${cash_add:,.2f} cash")
         else:
             # Sell stock to fund the withdrawal
             self.shares -= amount / stock_price
             balance -= amount
             if balance > self.max_balance:
                 self.max_balance = balance
+            if self.verbose:
+                print(f"withdraw: selling ${amount:,.2f} stock; balance ${balance:,.2f}; max_balance ${self.max_balance:,.2f}")
+
     
     def __repr__(self):
         return f'{self.__class__.__name__}(shares={self.shares})'
@@ -317,7 +333,8 @@ class Portfolio(object):
 
         previous_cpi = history[-self.withdrawals_per_year].cpi
         period_withdrawal *= tick.CPI / previous_cpi
-        
+        if self.verbose:
+            print(f"adjust_withdrawal_for_inflation: period_withdrawal ${period_withdrawal}")
         # TODO: Add a rule to increase the withdrawal when the portfolio has grown enough (10%?)
         # TODO: Add a rule to decrease the withdrawal (slightly; 3-4%) after down years?
         # NOTE: Both of the above should probably be controlled by options.
@@ -335,6 +352,8 @@ class Portfolio(object):
             # Adjust withdrawal amount annually.  TODO: Could this be every period?
             # TODO: Allow adjustment algorithm to be specified externally
             balance = self.balance(tick.close)
+            if self.verbose:
+                print(f"{tick.date}: balance=${balance:,.2f} cash={self.cash:,.2f} shares={self.shares} price={tick.close:,.2f}")
             if len(history) % self.withdrawals_per_year == 0 and len(history) > 0:
                 period_withdrawal = self.adjust_withdrawal_for_inflation(period_withdrawal, tick, history)
                 # TODO: Update self.annual_withdrawal
@@ -342,6 +361,8 @@ class Portfolio(object):
             
             # Make the period's withdrawal
             if balance < period_withdrawal:
+                if self.verbose:
+                    print(f"simulate_withdrawals: FAILED balance={balance:,.2f}, withdrawal={period_withdrawal:,.2f}")
                 return (False, history)
             self.withdraw(period_withdrawal, tick.close)
 
