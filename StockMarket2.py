@@ -132,7 +132,6 @@ class Decline(namedtuple('Decline', 'peak trough recovery percent')):
         result += f'{percent:6.2%}'
         return result
 
-# TODO: Should this take a @min_percent parameter?
 def declines(market_data_seq):
     market_data = iter(market_data_seq)
     tick = next(market_data)
@@ -174,8 +173,8 @@ def declines(market_data_seq):
 # Should that be a property of the Portfolio object, or should it be separate?
 # Should it include stock and/or bond prices?  If so, just include the Shiller data?
 #
-# NOTE: the balance item is the balance after the withdrawal
-# NOTE: withdrawal, balance and stock_price are all "real" (adjusted for inflation)
+# Note: the balance item is the balance after the withdrawal and dividend
+# Note: withdrawal, balance and stock_price are all "real" (adjusted for inflation)
 PortfolioHistoryItem = namedtuple('PortfolioHistoryItem', 'date withdrawal balance stock_price cpi')
 
 PeriodsResult = namedtuple('PeriodsResult', [
@@ -183,8 +182,7 @@ PeriodsResult = namedtuple('PeriodsResult', [
     'balance_cgr_median', 'balance_cgr_mean', 'balance_cgr_std',
     'withdrawal_cgr_median', 'withdrawal_cgr_mean', 'withdrawal_cgr_std',
     'periods'])
-Period = namedtuple('Period', 'survived sustained min_real max_real last_real growth_rate_real history')
-# TODO: Period should contain the period start date
+Period = namedtuple('Period', 'date survived sustained min_real max_real last_real growth_rate_real history')
 
 class Portfolio(object):
     def __init__(self,
@@ -203,7 +201,7 @@ class Portfolio(object):
         self.withdrawals_per_year = withdrawals_per_year
         self.annual_withdrawal_rate = annual_withdrawal_rate
         self.initial_balance = initial_balance
-        self.annual_withdrawal = initial_balance * annual_withdrawal_rate
+        self.annual_withdrawal = 0.0
         self.cash_cushion = cash_cushion
         self.cash_cushion_target = cash_cushion_target
         self.cash_use_threshold = cash_use_threshold
@@ -257,14 +255,13 @@ class Portfolio(object):
         return round(self.cash + self.shares * stock_price, 2)
     
     def init(self, stock_price):
-        # TODO: Should we use self.initial_balance instead of "amount"?
+        self.annual_withdrawal = self.initial_balance * self.annual_withdrawal_rate
         if self.cash_cushion:
             self.cash = self.cash_cushion_target * self.annual_withdrawal
             self.shares = (self.initial_balance - self.cash) / stock_price
         else:
             self.cash = 0.0
             self.shares = self.initial_balance / stock_price
-        # TODO: Should we also reset history, max balance, etc?
         self.max_balance = 0.0  # Highest balance seen previously  TODO: Part of balance history?
         if self.verbose:
             print(f"init: cash=${self.cash:,.2f}, shares={self.shares:,.2f}")
@@ -278,6 +275,8 @@ class Portfolio(object):
         if self.verbose:
             print(f"receive_dividend: dividend=${dividend_amount:,.2f}, shares={self.shares:,.2f}")
     
+    # TODO: Need to compute interest earned on cash.  Use 3-month treasury bill (TB3MS.csv) as a proxy.
+
     def withdraw(self, amount, stock_price):
         balance = self.balance(stock_price)
         if balance < amount:
@@ -343,9 +342,9 @@ class Portfolio(object):
     
     def simulate_withdrawals(self,
                              market_data_seq):          # Assumes montly Shiller data, length of one retirement
-        period_withdrawal = round(self.annual_withdrawal / self.withdrawals_per_year, 2)
         market_data = tuple(market_data_seq)[::12//self.withdrawals_per_year]
         self.init(market_data[0].close)
+        period_withdrawal = round(self.annual_withdrawal / self.withdrawals_per_year, 2)
         initial_cpi = market_data[0].CPI
         history = []
         for tick in market_data:
@@ -353,10 +352,10 @@ class Portfolio(object):
             # TODO: Allow adjustment algorithm to be specified externally
             balance = self.balance(tick.close)
             if self.verbose:
-                print(f"{tick.date}: balance=${balance:,.2f} cash={self.cash:,.2f} shares={self.shares} price={tick.close:,.2f}")
+                print(f"{tick.date}: balance=${balance:,.2f} cash=${self.cash:,.2f} shares={self.shares} price=${tick.close:,.2f}")
             if len(history) % self.withdrawals_per_year == 0 and len(history) > 0:
                 period_withdrawal = self.adjust_withdrawal_for_inflation(period_withdrawal, tick, history)
-                # TODO: Update self.annual_withdrawal
+                self.annual_withdrawal = period_withdrawal * self.withdrawals_per_year
                 # TODO: Should period_withdrawal be a member variable?
             
             # Make the period's withdrawal
@@ -405,7 +404,7 @@ class Portfolio(object):
             withdrawal_growth_rate = ((history[-1].withdrawal / history[0].withdrawal) ** (12/period_length)) - 1.0
             sustain = real_last >= self.initial_balance
 
-            periods.append(Period(success, sustain, real_min, real_max, real_last, balance_growth_rate, history))
+            periods.append(Period(period[0].date, success, sustain, real_min, real_max, real_last, balance_growth_rate, history))
 
             survived.append(success)
             sustained.append(sustain)
