@@ -190,14 +190,14 @@ class Portfolio(object):
                  annual_withdrawal_rate=0.04,
                  initial_balance=1000000.00,
                  cash_cushion = False,
-                 cash_cushion_target = 3,
-                 cash_use_threshold = 0.90,
-                 cash_rebuild_threshold = 1.0,
+                 cash_cushion_target = 3,       # Years of withdrawals
+                 cash_use_threshold = 0.90,     # Percent of portfolio max balance
+                 cash_rebuild_threshold = 1.0,  # Percent of portfolio max balance
                  cash_rebuild_rate = 1.5,
                  verbose = False):
         self.shares = 0.0       # Number of shares of stock
         self.cash = 0.0         # Amount of cash, in dollars
-        self.max_balance = 0.0  # Highest balance seen previously  TODO: Part of balance history?
+        self.max_balance = 0.0  # Highest balance seen previously, used for cash cushion
         self.withdrawals_per_year = withdrawals_per_year
         self.annual_withdrawal_rate = annual_withdrawal_rate
         self.initial_balance = initial_balance
@@ -341,7 +341,7 @@ class Portfolio(object):
         return round(period_withdrawal, 2)
     
     def simulate_withdrawals(self,
-                             market_data_seq):          # Assumes montly Shiller data, length of one retirement
+                             market_data_seq):          # Assumes monthly Shiller data, length of one retirement
         market_data = tuple(market_data_seq)[::12//self.withdrawals_per_year]
         self.init(market_data[0].close)
         period_withdrawal = round(self.annual_withdrawal / self.withdrawals_per_year, 2)
