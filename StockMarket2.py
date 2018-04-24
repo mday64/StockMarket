@@ -139,6 +139,14 @@ def read_tbills(fn='TB3MS.csv'):
             except ValueError:
                 continue
 
+def read_market_data():
+    MarketData = namedtuple('MarketData', 'date close dividend CPI interest')
+    shiller = read_shiller()
+    tbills = dict(read_tbills())
+    for i in shiller:
+        interest = tbills.get(i.date, 0.0)
+        yield MarketData(i.date, i.close, i.dividend, i.CPI, interest)
+
 class Decline(namedtuple('Decline', 'peak trough recovery percent')):
     def summarize(self):
         peak, trough, recovery, percent = self
@@ -447,7 +455,7 @@ class Portfolio(object):
             balance_median, balance_mean, balance_stdev,
             withdraw_median, withdraw_mean, withdraw_stdev,
             periods)
-
+            
 def main():
     for decline in declines(read_yahoo()):
         if decline.percent >= 0.05:
