@@ -128,7 +128,6 @@ def read_tbills(fn='TB3MS.csv'):
     with open(fn, mode='r') as f:
         reader = csv.reader(f)
         headers = next(reader)    # skip over column headers
-        print(repr(headers))
         assert(headers == ['DATE', 'TB3MS'])
         for row in reader:
             try:
