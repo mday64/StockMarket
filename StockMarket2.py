@@ -123,6 +123,22 @@ def read_yahoo(fn='^GSPC.csv'):
             except ValueError:
                 continue
 
+TBill = namedtuple('TBill', 'date rate')
+def read_tbills(fn='TB3MS.csv'):
+    with open(fn, mode='r') as f:
+        reader = csv.reader(f)
+        headers = next(reader)    # skip over column headers
+        print(repr(headers))
+        assert(headers == ['DATE', 'TB3MS'])
+        for row in reader:
+            try:
+                year, month, day = [int(i) for i in row[0].split('-')]
+                date = datetime.date(year, month, day)
+                rate = float(row[1])
+                yield TBill(date, rate)
+            except ValueError:
+                continue
+
 class Decline(namedtuple('Decline', 'peak trough recovery percent')):
     def summarize(self):
         peak, trough, recovery, percent = self
