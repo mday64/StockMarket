@@ -133,7 +133,7 @@ def read_tbills(fn='TB3MS.csv'):
             try:
                 year, month, day = [int(i) for i in row[0].split('-')]
                 date = datetime.date(year, month, day)
-                rate = float(row[1])
+                rate = float(row[1])/100.0
                 yield TBill(date, rate)
             except ValueError:
                 continue
@@ -298,8 +298,14 @@ class Portfolio(object):
         if self.verbose:
             print(f"receive_dividend: dividend=${dividend_amount:,.2f}, shares={self.shares:,.2f}")
     
-    # TODO: Need to compute interest earned on cash.  Use 3-month treasury bill (TB3MS.csv) as a proxy.
+    # Compute interest earned on cash.  Uses 3-month treasury bill (TB3MS.csv) as a proxy.
+    def receive_interest(self, interest_rate):
+        interest = self.cash * interest_rate
+        self.cash += interest
+        if self.verbose:
+            print(f"receive_interest: interest=${interest:,.2f}")
 
+    
     def withdraw(self, amount, stock_price):
         balance = self.balance(stock_price)
         if balance < amount:
@@ -391,6 +397,10 @@ class Portfolio(object):
             # Receive dividends
             self.receive_dividend(tick.dividend/self.withdrawals_per_year, tick.close)
 
+            # Receive interest on cash
+            if self.cash:
+                self.receive_interest(tick.interest/self.withdrawals_per_year)
+            
             # Update the history
             balance = self.balance(tick.close)
             assert balance >= 0
