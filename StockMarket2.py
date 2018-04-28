@@ -362,28 +362,6 @@ class Portfolio(object):
     def __repr__(self):
         return f'{self.__class__.__name__}(shares={self.shares})'
     
-    def adjust_withdrawal_for_inflation(self, period_withdrawal, tick, history):
-        # Called before the withdrawal has been made, so the next one can
-        # be adjusted.
-        #
-        # NOTE: Currently called annually, starting with the 1-year anniversary.
-        #
-        # Hmmm.  I wonder if the same function/object should be used to make the
-        # withdrawals, and adjust the withdrawal amount?  That way, it could
-        # consistently be quarterly, annually, or whatever.  It would be easy to
-        # first make the adjustment, then make the withdrawal.  Perhaps the
-        # withdrawal amount should be part of the history of the portfolio.
-
-        previous_cpi = history[-self.withdrawals_per_year].cpi
-        period_withdrawal *= tick.CPI / previous_cpi
-        if self.verbose:
-            print(f"adjust_withdrawal_for_inflation: period_withdrawal ${period_withdrawal}")
-        # TODO: Add a rule to increase the withdrawal when the portfolio has grown enough (10%?)
-        # TODO: Add a rule to decrease the withdrawal (slightly; 3-4%) after down years?
-        # NOTE: Both of the above should probably be controlled by options.
-        
-        return round(period_withdrawal, 2)
-    
     def adjust_withdrawal(self, period_withdrawal, tick, history):
         # Called before the withdrawal has been made, so the next one can
         # be adjusted.
