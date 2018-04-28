@@ -194,10 +194,9 @@ def declines(market_data_seq):
 #
 # Used for a history of the portfolio balance, withdrawal, and Consumer Price Index.
 # Should that be a property of the Portfolio object, or should it be separate?
-# Should it include stock and/or bond prices?  If so, just include the Shiller data?
+# Should it include stock and/or bond prices?  If so, just include the market data?
 #
 # Note: the balance item is the balance after the withdrawal and dividend
-# Note: withdrawal, balance and stock_price are all "real" (adjusted for inflation)
 PortfolioHistoryItem = namedtuple('PortfolioHistoryItem', 'date withdrawal balance stock_price cpi')
 
 PeriodsResult = namedtuple('PeriodsResult', [
@@ -398,8 +397,7 @@ class Portfolio(object):
         annual_maximum = max(h.balance for h in history[::-self.withdrawals_per_year])
         if self.verbose:
             print(f"annual_maximum={annual_maximum}  {[h.balance for h in history[-self.withdrawals_per_year::-self.withdrawals_per_year]]}")
-        # ERROR: The history contains inflation-adjusted balance, not nominal balance
-        
+
         if self.paycut and balance <= self.max_balance * self.paycut_threshold:
             period_withdrawal = round(period_withdrawal * self.paycut_rate, 2)
             if self.verbose:
@@ -424,7 +422,6 @@ class Portfolio(object):
         market_data = tuple(market_data_seq)[::12//self.withdrawals_per_year]
         self.init(market_data[0].close)
         period_withdrawal = round(self.annual_withdrawal / self.withdrawals_per_year, 2)
-        initial_cpi = market_data[0].CPI
         history = []
         for tick in market_data:
             # Adjust withdrawal amount annually.  TODO: Could this be every period?
@@ -455,12 +452,7 @@ class Portfolio(object):
             balance = self.balance(tick.close)
             assert balance >= 0
 
-            real_factor = initial_cpi / tick.CPI
-            real_balance = round(balance * real_factor, 2)
-            real_withdrawal = round(period_withdrawal * real_factor, 2)
-            real_stock_price = round(tick.close * real_factor, 2)
-
-            history.append(PortfolioHistoryItem(tick.date, real_withdrawal, real_balance, real_stock_price, tick.CPI))
+            history.append(PortfolioHistoryItem(tick.date, period_withdrawal, balance, tick.close, tick.CPI))
 
         return (True, history)
 
@@ -480,11 +472,12 @@ class Portfolio(object):
         periods = []
         for period in subranges(market_data, period_length):
             success, history = self.simulate_withdrawals(period)
-            real_min = min(i.balance for i in history)
-            real_max = max(i.balance for i in history)
-            real_last = history[-1].balance
+            real_balances = [i.balance * i.cpi / history[0].cpi for i in history]
+            real_min = min(real_balances)
+            real_max = max(real_balances)
+            real_last = real_balances[-1]
             balance_growth_rate = ((real_last / self.initial_balance) ** (12/period_length)) - 1.0
-            withdrawal_growth_rate = ((history[-1].withdrawal / history[0].withdrawal) ** (12/period_length)) - 1.0
+            withdrawal_growth_rate = ((history[-1].withdrawal / history[0].withdrawal * history[0].cpi / history[-1].cpi) ** (12/period_length)) - 1.0
             sustain = real_last >= self.initial_balance
 
             periods.append(Period(period[0].date, success, sustain, real_min, real_max, real_last, balance_growth_rate, history))
