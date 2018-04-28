@@ -217,6 +217,14 @@ class Portfolio(object):
                  cash_use_threshold = 0.90,     # Percent of portfolio max balance
                  cash_rebuild_threshold = 1.0,  # Percent of portfolio max balance
                  cash_rebuild_rate = 1.5,
+                 paycut = False,
+                 paycut_threshold = 0.90,       # If portfolio is less than this much of maximum,
+                 paycut_rate = 0.97,            # decrease the withdrawal to this much
+                 raise_enable = False,
+                 raise_threshold = 1.10,        # If portfolio is at least this much of prior year,
+                 raise_rate = 1.10,             # increase the withdrawal by this much
+                 ratchet = False,
+                 ratchet_to_rate = 0.035,       # Increase withdrawal to this rate
                  verbose = False):
         self.shares = 0.0       # Number of shares of stock
         self.cash = 0.0         # Amount of cash, in dollars
@@ -230,6 +238,14 @@ class Portfolio(object):
         self.cash_use_threshold = cash_use_threshold
         self.cash_rebuild_threshold = cash_rebuild_threshold
         self.cash_rebuild_rate = cash_rebuild_rate
+        self.paycut = paycut
+        self.paycut_threshold = paycut_threshold
+        self.paycut_rate = paycut_rate
+        self.raise_enable = raise_enable
+        self.raise_threshold = raise_threshold
+        self.raise_rate = raise_rate
+        self.ratchet = ratchet
+        self.ratchet_to_rate = ratchet_to_rate
         self.verbose = verbose
     #
     # A Cash Cushion: keeping part of the portfolio in cash, to be used
@@ -369,6 +385,40 @@ class Portfolio(object):
         
         return round(period_withdrawal, 2)
     
+    def adjust_withdrawal(self, period_withdrawal, tick, history):
+        # Called before the withdrawal has been made, so the next one can
+        # be adjusted.
+        #
+        # NOTE: Currently called annually, starting with the 1-year anniversary.
+        #
+
+        previous_cpi = history[-self.withdrawals_per_year].cpi
+        balance = self.balance(tick.close)
+
+        annual_maximum = max(h.balance for h in history[::-self.withdrawals_per_year])
+        if self.verbose:
+            print(f"annual_maximum={annual_maximum}  {[h.balance for h in history[-self.withdrawals_per_year::-self.withdrawals_per_year]]}")
+        # ERROR: The history contains inflation-adjusted balance, not nominal balance
+        
+        if self.paycut and balance <= self.max_balance * self.paycut_threshold:
+            period_withdrawal = round(period_withdrawal * self.paycut_rate, 2)
+            if self.verbose:
+                print(f"adjust_withdrawal: pay cut; withdrawal={period_withdrawal}")
+        elif self.raise_enable and balance >= annual_maximum * self.raise_threshold:
+            period_withdrawal = round(period_withdrawal * self.raise_rate, 2)
+            if self.verbose:
+                print(f"adjust_withdrawal: raise; withdrawal={period_withdrawal}")
+        elif self.ratchet and self.annual_withdrawal < balance * self.ratchet_to_rate:
+            period_withdrawal = round(balance * self.ratchet_to_rate / self.withdrawals_per_year, 2)
+            if self.verbose:
+                print(f"adjust_withdrawal: ratchet up; withdrawal={period_withdrawal}")
+        else:
+            period_withdrawal = round(period_withdrawal * tick.CPI / previous_cpi, 2)
+            if self.verbose:
+                print(f"adjust_withdrawal: (inflation); withdrawal={period_withdrawal}")
+        
+        return round(period_withdrawal, 2)
+
     def simulate_withdrawals(self,
                              market_data_seq):          # Assumes monthly Shiller data, length of one retirement
         market_data = tuple(market_data_seq)[::12//self.withdrawals_per_year]
@@ -383,7 +433,7 @@ class Portfolio(object):
             if self.verbose:
                 print(f"{tick.date}: balance=${balance:,.2f} cash=${self.cash:,.2f} shares={self.shares} price=${tick.close:,.2f}")
             if len(history) % self.withdrawals_per_year == 0 and len(history) > 0:
-                period_withdrawal = self.adjust_withdrawal_for_inflation(period_withdrawal, tick, history)
+                period_withdrawal = self.adjust_withdrawal(period_withdrawal, tick, history)
                 self.annual_withdrawal = period_withdrawal * self.withdrawals_per_year
                 # TODO: Should period_withdrawal be a member variable?
             
@@ -465,6 +515,11 @@ class Portfolio(object):
             withdraw_median, withdraw_mean, withdraw_stdev,
             periods)
             
+def print_history(history):
+    for item in history:
+        print(f"{item.date}: withdrawal={item.withdrawal}  balance={item.balance}  stock_price={item.stock_price}  cpi={item.cpi}")
+    print()
+    
 def main():
     for decline in declines(read_yahoo()):
         if decline.percent >= 0.05:
