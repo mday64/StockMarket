@@ -204,7 +204,7 @@ PeriodsResult = namedtuple('PeriodsResult', [
     'balance_cgr_median', 'balance_cgr_mean', 'balance_cgr_std',
     'withdrawal_cgr_median', 'withdrawal_cgr_mean', 'withdrawal_cgr_std',
     'periods'])
-Period = namedtuple('Period', 'date survived sustained min_real max_real last_real growth_rate_real history')
+Period = namedtuple('Period', 'date survived sustained min_real max_real last_real growth_rate_real withdrawal_rate_real history')
 
 class Portfolio(object):
     def __init__(self,
@@ -224,6 +224,7 @@ class Portfolio(object):
                  raise_rate = 1.10,             # increase the withdrawal by this much
                  ratchet = False,
                  ratchet_to_rate = 0.035,       # Increase withdrawal to this rate
+                 sustain_threshold = 0.95, # Ending with 95% of original balance (inflation adjusted) counts as "sustained"
                  verbose = False):
         self.shares = 0.0       # Number of shares of stock
         self.cash = 0.0         # Amount of cash, in dollars
@@ -245,6 +246,7 @@ class Portfolio(object):
         self.raise_rate = raise_rate
         self.ratchet = ratchet
         self.ratchet_to_rate = ratchet_to_rate
+        self.sustain_threshold = sustain_threshold
         self.verbose = verbose
     #
     # A Cash Cushion: keeping part of the portfolio in cash, to be used
@@ -375,6 +377,7 @@ class Portfolio(object):
         annual_maximum = max(h.balance for h in history[::-self.withdrawals_per_year])
         if self.verbose:
             print(f"annual_maximum={annual_maximum}  {[h.balance for h in history[-self.withdrawals_per_year::-self.withdrawals_per_year]]}")
+            print(f"annual_withdrawal={self.annual_withdrawal}, balance={balance}, balance*ratchet_to_rate={balance * self.ratchet_to_rate}")
 
         if self.paycut and balance <= self.max_balance * self.paycut_threshold:
             period_withdrawal = round(period_withdrawal * self.paycut_rate, 2)
@@ -430,6 +433,8 @@ class Portfolio(object):
             balance = self.balance(tick.close)
             assert balance >= 0
 
+            if self.verbose:
+                print(f"{tick.date}: balance={balance}, withdrawal={period_withdrawal}, CPI={tick.CPI}")
             history.append(PortfolioHistoryItem(tick.date, period_withdrawal, balance, tick.close, tick.CPI))
 
         return (True, history)
@@ -450,15 +455,15 @@ class Portfolio(object):
         periods = []
         for period in subranges(market_data, period_length):
             success, history = self.simulate_withdrawals(period)
-            real_balances = [i.balance * i.cpi / history[0].cpi for i in history]
+            real_balances = [i.balance * history[0].cpi / i.cpi for i in history]
             real_min = min(real_balances)
             real_max = max(real_balances)
             real_last = real_balances[-1]
             balance_growth_rate = ((real_last / self.initial_balance) ** (12/period_length)) - 1.0
             withdrawal_growth_rate = ((history[-1].withdrawal / history[0].withdrawal * history[0].cpi / history[-1].cpi) ** (12/period_length)) - 1.0
-            sustain = real_last >= self.initial_balance
+            sustain = real_last >= self.initial_balance * self.sustain_threshold
 
-            periods.append(Period(period[0].date, success, sustain, real_min, real_max, real_last, balance_growth_rate, history))
+            periods.append(Period(period[0].date, success, sustain, real_min, real_max, real_last, balance_growth_rate, withdrawal_growth_rate, history))
 
             survived.append(success)
             sustained.append(sustain)
