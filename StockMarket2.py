@@ -223,7 +223,7 @@ class Portfolio(object):
                  raise_threshold = 1.10,        # If portfolio is at least this much of prior year,
                  raise_rate = 1.10,             # increase the withdrawal by this much
                  ratchet = False,
-                 ratchet_to_rate = 0.035,       # Increase withdrawal to this rate
+                 ratchet_to_rate = 0.04,       # Increase withdrawal to this rate
                  sustain_threshold = 0.95, # Ending with 95% of original balance (inflation adjusted) counts as "sustained"
                  verbose = False):
         self.shares = 0.0       # Number of shares of stock
@@ -248,6 +248,25 @@ class Portfolio(object):
         self.ratchet_to_rate = ratchet_to_rate
         self.sustain_threshold = sustain_threshold
         self.verbose = verbose
+    #
+    # TODO: Get rid of ratchet_to_rate.  Just use annual_withdrawal_rate.
+    #
+    # TODO: Implement a way for the withdrawal rate to vary over time.
+    # When using ratcheting withdrawals, this might just be a ratchet-
+    # to rate varies over time.  It would be useful to have a similar
+    # concept for simple safe withdrawal rate.  Perhaps some multiplier
+    # that gets applied to the nominal (inflation-adjusted) withdrawal
+    # rate.
+    #
+    # Then I'd like to be able to model something like a "retirement
+    # smile" where withdrawals are higher at the beginning and end of
+    # retirement, and smaller in the middle.  That will beg the question
+    # about how to vary the relative withdrawal over time.  Simple linear
+    # interpolation?  A trigonometric function (eg., sin or cos)?
+    # Quadratic or cubic curve?  Should the rate vary more at the ends
+    # or near the middle (i.e. convex or concave)?
+    #
+    
     #
     # A Cash Cushion: keeping part of the portfolio in cash, to be used
     # during market declines.
