@@ -204,7 +204,11 @@ PeriodsResult = namedtuple('PeriodsResult', [
     'balance_cgr_median', 'balance_cgr_mean', 'balance_cgr_std',
     'withdrawal_cgr_median', 'withdrawal_cgr_mean', 'withdrawal_cgr_std',
     'periods'])
-Period = namedtuple('Period', 'date survived sustained min_real max_real last_real last_real_fraction growth_rate_real withdrawal_rate_real history')
+Period = namedtuple('Period', 'date survived sustained '\
+                              'min_real max_real last_real last_real_fraction '\
+                              'growth_rate_real withdrawal_rate_real '\
+                              'last_withdrawal_rate '\
+                              'history')
 
 class Portfolio(object):
     def __init__(self,
@@ -480,9 +484,14 @@ class Portfolio(object):
             real_last_fraction = real_last / history[0].balance
             balance_growth_rate = ((real_last / self.initial_balance) ** (12/period_length)) - 1.0
             withdrawal_growth_rate = ((history[-1].withdrawal / history[0].withdrawal * history[0].cpi / history[-1].cpi) ** (12/period_length)) - 1.0
+            last_withdrawal_rate = history[-1].withdrawal * self.withdrawals_per_year / history[-1].balance
             sustain = real_last >= self.initial_balance * self.sustain_threshold
 
-            periods.append(Period(period[0].date, success, sustain, real_min, real_max, real_last, real_last_fraction, balance_growth_rate, withdrawal_growth_rate, history))
+            periods.append(Period(period[0].date, success, sustain,
+                                  real_min, real_max, real_last, real_last_fraction, 
+                                  balance_growth_rate, withdrawal_growth_rate,
+                                  last_withdrawal_rate,
+                                  history))
 
             survived.append(success)
             sustained.append(sustain)
