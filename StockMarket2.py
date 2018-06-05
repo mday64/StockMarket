@@ -419,7 +419,7 @@ class Portfolio(object):
             if self.verbose:
                 print(f"adjust_withdrawal: (inflation); withdrawal={period_withdrawal}")
         
-        return round(period_withdrawal, 2)
+        return period_withdrawal
 
     def simulate_withdrawals(self,
                              market_data_seq):          # Assumes monthly Shiller data, length of one retirement
