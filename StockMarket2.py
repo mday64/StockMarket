@@ -227,7 +227,6 @@ class Portfolio(object):
                  raise_threshold = 1.10,        # If portfolio is at least this much of prior year,
                  raise_rate = 1.10,             # increase the withdrawal by this much
                  ratchet = False,
-                 ratchet_to_rate = 0.04,       # Increase withdrawal to this rate
                  sustain_threshold = 0.95, # Ending with 95% of original balance (inflation adjusted) counts as "sustained"
                  verbose = False):
         self.shares = 0.0       # Number of shares of stock
@@ -249,13 +248,14 @@ class Portfolio(object):
         self.raise_threshold = raise_threshold
         self.raise_rate = raise_rate
         self.ratchet = ratchet
-        self.ratchet_to_rate = ratchet_to_rate
         self.sustain_threshold = sustain_threshold
         self.verbose = verbose
     #
-    # TODO: Get rid of ratchet_to_rate.  Just use annual_withdrawal_rate.
-    #
     # TODO: Implement a way for the withdrawal rate to vary over time.
+    #
+    # For example, have the withdrawal rate be higher at the start and
+    # end of retirement, and less in the middle ("retirement smile").
+    #
     # When using ratcheting withdrawals, this might just be a ratchet-
     # to rate varies over time.  It would be useful to have a similar
     # concept for simple safe withdrawal rate.  Perhaps some multiplier
@@ -400,7 +400,7 @@ class Portfolio(object):
         annual_maximum = max(h.balance for h in history[::-self.withdrawals_per_year])
         if self.verbose:
             print(f"annual_maximum={annual_maximum}  {[h.balance for h in history[-self.withdrawals_per_year::-self.withdrawals_per_year]]}")
-            print(f"annual_withdrawal={self.annual_withdrawal}, balance={balance}, balance*ratchet_to_rate={balance * self.ratchet_to_rate}")
+            print(f"annual_withdrawal={self.annual_withdrawal}, balance={balance}, balance*annual_withdrawal_rate={balance * self.annual_withdrawal_rate}")
 
         if self.paycut and balance <= self.max_balance * self.paycut_threshold:
             period_withdrawal = round(period_withdrawal * self.paycut_rate, 2)
@@ -410,8 +410,8 @@ class Portfolio(object):
             period_withdrawal = round(period_withdrawal * self.raise_rate, 2)
             if self.verbose:
                 print(f"adjust_withdrawal: raise; withdrawal={period_withdrawal}")
-        elif self.ratchet and self.annual_withdrawal < balance * self.ratchet_to_rate:
-            period_withdrawal = round(balance * self.ratchet_to_rate / self.withdrawals_per_year, 2)
+        elif self.ratchet and self.annual_withdrawal < balance * self.annual_withdrawal_rate:
+            period_withdrawal = round(balance * self.annual_withdrawal_rate / self.withdrawals_per_year, 2)
             if self.verbose:
                 print(f"adjust_withdrawal: ratchet up; withdrawal={period_withdrawal}")
         else:
